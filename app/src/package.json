@@ -1,0 +1,18 @@
+{
+  "name": "fireblocks-callback-handler",
+  "version": "1.0.0",
+  "description": "Fireblocks Callback Handler for ECS Fargate",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.0.0",
+    "body-parser": "^1.20.2",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "author": "mahiro",
+  "license": "MIT"
+}
