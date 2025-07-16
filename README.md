@@ -234,18 +234,24 @@ cp callback_private.pem certs/
 ### 3. SSL証明書の作成
 
 ```bash
+# certsディレクトリでSSL証明書を作成
+cd certs
+
 # プライベートドメイン用の自己署名証明書を作成（10年間有効）
-openssl req -x509 -newkey rsa:2048 -keyout callback-handler.key -out callback-handler.crt -days 3650 -nodes -subj "/C=US/ST=CA/L=San Francisco/O=Fireblocks/CN=callback-handler.internal"
+openssl req -x509 -newkey rsa:2048 -keyout callback-handler-ssl.key -out callback-handler-ssl.crt -days 3650 -nodes -subj "/C=US/ST=CA/L=San Francisco/O=Fireblocks/CN=callback-handler.internal"
 
 # ACMに証明書をインポート
 aws acm import-certificate \
-    --certificate fileb://callback-handler.crt \
-    --private-key fileb://callback-handler.key \
+    --certificate fileb://callback-handler-ssl.crt \
+    --private-key fileb://callback-handler-ssl.key \
     --region ap-northeast-1 \
     --profile ****
 
 # 証明書ARNを取得（後で使用）
 aws acm list-certificates --region ap-northeast-1 --profile ****
+
+# プロジェクトルートに戻る
+cd ..
 ```
 
 ### 4. 設定ファイルの準備

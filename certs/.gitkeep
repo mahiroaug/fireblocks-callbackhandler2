@@ -4,3 +4,7 @@
 # - cosigner_public.pem
 # - callback_private.pem 
 # - callback_public.pem 
+
+# SSL証明書ファイル:
+# - callback-handler-ssl.crt
+# - callback-handler-ssl.key 
