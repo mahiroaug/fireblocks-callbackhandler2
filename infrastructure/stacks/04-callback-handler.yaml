@@ -1,5 +1,5 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Fireblocks Callback Handler - Callback Handler Stack (ALB, ECS Fargate)'
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Fireblocks Callback Handler - Callback Handler Stack (ALB, ECS Fargate)"
 
 Parameters:
   ProjectName:
@@ -16,7 +16,7 @@ Parameters:
   ContainerImage:
     Type: String
     Description: ECR image URI for callback handler
-    Default: "nginx:latest"  # プレースホルダー
+    Default: "nginx:latest" # プレースホルダー
 
   SSLCertificateArn:
     Type: String
@@ -28,7 +28,7 @@ Resources:
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/ecs/${ProjectName}-callback-handler-${Environment}'
+      LogGroupName: !Sub "/aws/ecs/${ProjectName}-callback-handler-${Environment}"
       RetentionInDays: 30
 
   # ECS Cluster
@@ -66,9 +66,9 @@ Resources:
         - FARGATE
       Cpu: 256
       Memory: 512
-      ExecutionRoleArn: 
+      ExecutionRoleArn:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-ECSTaskExecutionRole-ARN
-      TaskRoleArn: 
+      TaskRoleArn:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-ECSTaskRole-ARN
       ContainerDefinitions:
         - Name: callback-handler
@@ -115,7 +115,8 @@ Resources:
       Scheme: internal
       IpAddressType: ipv4
       Subnets:
-        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnetA-ID
+        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnetB-ID
       SecurityGroups:
         - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-ALBSecurityGroup-ID
       Tags:
@@ -137,7 +138,7 @@ Resources:
       Name: !Sub ${ProjectName}-tg-${Environment}
       Port: 3000
       Protocol: HTTP
-      VpcId: 
+      VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
       TargetType: ip
       HealthCheckPath: /health
@@ -176,16 +177,16 @@ Resources:
   ALBDNSRecord:
     Type: AWS::Route53::RecordSet
     Properties:
-      HostedZoneId: 
+      HostedZoneId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateHostedZone-ID
-      Name: 
+      Name:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-DomainName
       Type: A
       AliasTarget:
         DNSName: !GetAtt ApplicationLoadBalancer.DNSName
         HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
         EvaluateTargetHealth: true
-      Comment: 'A record pointing to ALB for callback handler'
+      Comment: "A record pointing to ALB for callback handler"
 
   # ECS Service
   ECSService:
@@ -202,7 +203,8 @@ Resources:
           SecurityGroups:
             - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-ECSSecurityGroup-ID
           Subnets:
-            - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+            - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnetA-ID
+            - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnetB-ID
           AssignPublicIp: DISABLED
       LoadBalancers:
         - ContainerName: callback-handler
@@ -226,7 +228,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-callback-handler-high-cpu-${Environment}
-      AlarmDescription: 'High CPU utilization for callback handler'
+      AlarmDescription: "High CPU utilization for callback handler"
       MetricName: CPUUtilization
       Namespace: AWS/ECS
       Statistic: Average
@@ -245,7 +247,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-callback-handler-high-memory-${Environment}
-      AlarmDescription: 'High memory utilization for callback handler'
+      AlarmDescription: "High memory utilization for callback handler"
       MetricName: MemoryUtilization
       Namespace: AWS/ECS
       Statistic: Average
@@ -287,9 +289,9 @@ Outputs:
 
   CallbackHandlerURL:
     Description: Callback Handler URL
-    Value: !Sub 
+    Value: !Sub
       - https://${DomainName}
-      - DomainName: 
+      - DomainName:
           Fn::ImportValue: !Sub ${ProjectName}-${Environment}-DomainName
     Export:
-      Name: !Sub ${ProjectName}-${Environment}-CallbackHandler-URL 
+      Name: !Sub ${ProjectName}-${Environment}-CallbackHandler-URL

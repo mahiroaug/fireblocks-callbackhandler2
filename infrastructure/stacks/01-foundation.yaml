@@ -1,32 +1,37 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Fireblocks Callback Handler - Foundation Stack (VPC, Subnets, Gateways)'
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Fireblocks Callback Handler - Foundation Stack (VPC, Subnets, Gateways)"
 
 Parameters:
   ProjectName:
     Type: String
     Default: fireblocks-cbh
     Description: Project name for resource naming
-  
+
   Environment:
     Type: String
     Default: dev
     AllowedValues: [dev, stg, prod]
     Description: Environment name
-  
+
   VpcCIDR:
     Type: String
     Default: 10.0.0.0/16
     Description: CIDR block for VPC
-  
-  PublicSubnetCIDR:
+
+    PublicSubnetCIDR:
     Type: String
     Default: 10.0.0.0/20
     Description: CIDR block for Public Subnet (NAT Gateway)
-  
-  PrivateSubnetCIDR:
+
+  PrivateSubnetACIDR:
     Type: String
     Default: 10.0.128.0/20
-    Description: CIDR block for Private Subnet (Cosigner + ECS)
+    Description: CIDR block for Private Subnet A (Cosigner + ECS)
+
+  PrivateSubnetBCIDR:
+    Type: String
+    Default: 10.0.144.0/20
+    Description: CIDR block for Private Subnet B (Cosigner + ECS)
 
 Resources:
   # VPC Configuration
@@ -54,7 +59,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Ref PublicSubnetCIDR
-      AvailabilityZone: !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [0, !GetAZs ""]
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
@@ -68,17 +73,37 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Private Subnet (Cosigner + ECS用)
-  PrivateSubnet:
+  # Private Subnet A (Cosigner + ECS用)
+  PrivateSubnetA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Ref PrivateSubnetCIDR
-      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnetACIDR
+      AvailabilityZone: !Select [0, !GetAZs ""]
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-private-subnet-${Environment}
+          Value: !Sub ${ProjectName}-private-subnet-a-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Type
+          Value: Private
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # Private Subnet B (Cosigner + ECS用)
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetBCIDR
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-subnet-b-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Type
@@ -195,11 +220,18 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NATGateway
 
-  # Private Subnet Route Table Association
-  PrivateSubnetRouteTableAssociation:
+  # Private Subnet A Route Table Association
+  PrivateSubnetARouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnet
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Private Subnet B Route Table Association
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
       RouteTableId: !Ref PrivateRouteTable
 
 Outputs:
@@ -215,9 +247,22 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PublicSubnet-ID
 
+  PrivateSubnetAId:
+    Description: Private Subnet A ID
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetA-ID
+
+  PrivateSubnetBId:
+    Description: Private Subnet B ID
+    Value: !Ref PrivateSubnetB
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetB-ID
+
+  # Backward compatibility - ALB will use this for primary subnet
   PrivateSubnetId:
-    Description: Private Subnet ID
-    Value: !Ref PrivateSubnet
+    Description: Private Subnet ID (Primary - for backward compatibility)
+    Value: !Ref PrivateSubnetA
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
 
@@ -249,4 +294,4 @@ Outputs:
     Description: Project name
     Value: !Ref ProjectName
     Export:
-      Name: !Sub ${ProjectName}-${Environment}-ProjectName 
+      Name: !Sub ${ProjectName}-${Environment}-ProjectName

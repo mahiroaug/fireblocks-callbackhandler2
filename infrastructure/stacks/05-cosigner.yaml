@@ -83,7 +83,7 @@ Resources:
       InstanceType: !Ref InstanceType
       ImageId: ami-03598bf9d15814511 # Amazon Linux 2023 (ap-northeast-1)
       SubnetId:
-        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnetA-ID
       SecurityGroupIds:
         - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerSecurityGroup-ID
       IamInstanceProfile:

@@ -168,8 +168,12 @@ create_parameter_files() {
         "ParameterValue": "10.0.0.0/20"
     },
     {
-        "ParameterKey": "PrivateSubnetCIDR",
+        "ParameterKey": "PrivateSubnetACIDR",
         "ParameterValue": "10.0.128.0/20"
+    },
+    {
+        "ParameterKey": "PrivateSubnetBCIDR",
+        "ParameterValue": "10.0.144.0/20"
     }
 ]
 EOF
