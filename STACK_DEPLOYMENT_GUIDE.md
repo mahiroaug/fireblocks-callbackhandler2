@@ -75,7 +75,7 @@ e2e-monitor-cbh/
 
 1. **AWS CLI設定**
    ```bash
-   aws configure --profile dev_mtools
+   aws configure --profile ****
    ```
 
 2. **必要な権限**
@@ -172,7 +172,7 @@ vi infrastructure/parameters/dev/cosigner.json
 
 ```bash
 export REGION="ap-northeast-1"
-export PROFILE="dev_mtools"
+export PROFILE="****"
 export ENVIRONMENT="dev"
 ```
 

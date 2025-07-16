@@ -20,8 +20,7 @@ Parameters:
 
   SSLCertificateArn:
     Type: String
-    Description: SSL certificate ARN for ALB
-    Default: ""
+    Description: SSL certificate ARN for ALB (will be created manually)
 
 Resources:
   # CloudWatch Log Group

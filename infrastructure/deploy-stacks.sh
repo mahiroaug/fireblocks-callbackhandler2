@@ -21,7 +21,7 @@ print_status() {
 
 # Configuration
 REGION="ap-northeast-1"
-PROFILE="dev_mtools"
+PROFILE="default"
 ENVIRONMENT="dev"
 
 # Load configuration from common.json
@@ -210,6 +210,21 @@ EOF
 ]
 EOF
 
+    # Get SSL Certificate ARN from ACM
+    SSL_CERT_ARN=$(aws acm list-certificates \
+        --region "$REGION" \
+        --profile "$PROFILE" \
+        --query 'CertificateSummaryList[?DomainName==`callback-handler.internal`].CertificateArn' \
+        --output text | head -1)
+    
+    if [ -z "$SSL_CERT_ARN" ]; then
+        SSL_CERT_ARN="arn:aws:acm:${REGION}:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+        print_status "$YELLOW" "Warning: No SSL certificate found for callback-handler.internal. Using placeholder."
+        print_status "$YELLOW" "Please create and import SSL certificate before deploying callback-handler stack."
+    else
+        print_status "$GREEN" "Found SSL certificate: $SSL_CERT_ARN"
+    fi
+
     # Callback Handler Stack Parameters
     cat > "$env_dir/callback-handler.json" << EOF
 [
@@ -227,7 +242,7 @@ EOF
     },
     {
         "ParameterKey": "SSLCertificateArn",
-        "ParameterValue": "arn:aws:acm:${REGION}:ACCOUNT_ID:certificate/REPLACE_ME"
+        "ParameterValue": "${SSL_CERT_ARN}"
     }
 ]
 EOF
@@ -246,14 +261,6 @@ EOF
     {
         "ParameterKey": "InstanceType",
         "ParameterValue": "c5.xlarge"
-    },
-    {
-        "ParameterKey": "CosignerPairingToken",
-        "ParameterValue": "REPLACE_WITH_PAIRING_TOKEN"
-    },
-    {
-        "ParameterKey": "CosignerInstallationScript",
-        "ParameterValue": "REPLACE_WITH_INSTALLATION_SCRIPT_URL"
     }
 ]
 EOF

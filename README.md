@@ -231,21 +231,91 @@ cp cosigner_public.pem app/certs/
 cp callback_private.pem app/certs/
 ```
 
-### 3. マルチスタックデプロイメント
+### 3. SSL証明書の作成
 
 ```bash
-# 全スタックのデプロイ
+# プライベートドメイン用の自己署名証明書を作成（10年間有効）
+openssl req -x509 -newkey rsa:2048 -keyout callback-handler.key -out callback-handler.crt -days 3650 -nodes -subj "/C=US/ST=CA/L=San Francisco/O=Fireblocks/CN=callback-handler.internal"
+
+# ACMに証明書をインポート
+aws acm import-certificate \
+    --certificate fileb://callback-handler.crt \
+    --private-key fileb://callback-handler.key \
+    --region ap-northeast-1 \
+    --profile ****
+
+# 証明書ARNを取得（後で使用）
+aws acm list-certificates --region ap-northeast-1 --profile ****
+```
+
+### 4. 設定ファイルの準備
+
+```bash
+# パラメータファイルを作成
+./infrastructure/deploy-stacks.sh create-params
+
+# 作成されたパラメータファイルを編集
+# infrastructure/parameters/dev/callback-handler.json
+# - ContainerImage: 実際のECRイメージURIに置換（必要に応じて）
+
+# infrastructure/parameters/dev/cosigner.json
+# - 基本的なパラメータ（ProjectName, Environment, InstanceType）のみ
+# - CosignerのペアリングトークンやインストールはEC2起動後に手動設定
+```
+
+### 5. マルチスタックデプロイメント
+
+```bash
+# 現在のスタック状態を確認
+./infrastructure/deploy-stacks.sh status
+
+# AWS認証情報の設定確認
+aws configure list --profile ****
+
+# 全スタックのデプロイ（開発環境）
 ./infrastructure/deploy-stacks.sh deploy-all
 
-# 個別スタックのデプロイ
+# 本番環境でのデプロイ（環境指定）
+./infrastructure/deploy-stacks.sh deploy-all -e production-jp
+
+# 個別スタックのデプロイ（依存関係順）
 ./infrastructure/deploy-stacks.sh deploy-foundation
 ./infrastructure/deploy-stacks.sh deploy-security
 ./infrastructure/deploy-stacks.sh deploy-dns
 ./infrastructure/deploy-stacks.sh deploy-callback
 ./infrastructure/deploy-stacks.sh deploy-cosigner
+
+# パラメータファイルの作成（初回のみ）
+./infrastructure/deploy-stacks.sh create-params
+
+# ヘルプの表示
+./infrastructure/deploy-stacks.sh help
 ```
 
+**重要**: 
+- 初回デプロイ前に SSL証明書をACMに作成・インポート
+- `create-params` でパラメータファイルを作成
+- 依存関係があるため、個別デプロイ時は順序を守る
+- Cosignerの設定（ペアリングトークン、インストール）はEC2起動後に手動で実施
+
 詳細なデプロイメント手順については、**[STACK_DEPLOYMENT_GUIDE.md](STACK_DEPLOYMENT_GUIDE.md)**を参照してください。
+
+### 6. Cosignerの手動設定
+
+インフラストラクチャのデプロイ完了後、Cosignerの設定を手動で実施：
+
+```bash
+# Cosignerインスタンスへのアクセス（Session Manager経由）
+# インスタンスIDは AWS Console または CLI で確認
+aws ssm start-session --target i-xxxxxxxxx --region ap-northeast-1
+
+# Cosignerソフトウェアのインストール
+sudo yum update -y
+# Fireblocks提供のCosignerインストール手順に従う
+
+# ペアリングトークンの設定
+# Fireblocks Console から取得したペアリングトークンを使用
+```
 
 ## 💰 コスト
 

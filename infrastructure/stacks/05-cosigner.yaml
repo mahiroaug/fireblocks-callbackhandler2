@@ -24,17 +24,6 @@ Parameters:
     Description: EC2 Key Pair name for emergency access
     Default: ""
 
-  CosignerPairingToken:
-    Type: String
-    Description: Fireblocks Cosigner pairing token
-    NoEcho: true
-    Default: ""
-
-  CosignerInstallationScript:
-    Type: String
-    Description: Cosigner installation script URL
-    Default: ""
-
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
 
@@ -123,8 +112,6 @@ Resources:
           echo "Cosigner instance initialization completed" >> /var/log/cosigner-init.log
 
           # Store environment variables for later use
-          echo "COSIGNER_PAIRING_TOKEN=${CosignerPairingToken}" >> /home/ec2-user/.env
-          echo "COSIGNER_INSTALLATION_SCRIPT=${CosignerInstallationScript}" >> /home/ec2-user/.env
           echo "ENVIRONMENT=${Environment}" >> /home/ec2-user/.env
           chown ec2-user:ec2-user /home/ec2-user/.env
 
@@ -204,24 +191,6 @@ Resources:
             }
           }
         }
-
-  # Cosigner Installation Script Parameter
-  CosignerInstallationScriptParam:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/fireblocks-callback-infrastructure/${ProjectName}-cosigner-${Environment}/installation-script"
-      Type: String
-      Value: !Ref CosignerInstallationScript
-      Description: Cosigner installation script URL
-
-  # Cosigner Pairing Token Parameter
-  CosignerPairingTokenParam:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/fireblocks-callback-infrastructure/${ProjectName}-cosigner-${Environment}/pairing-token"
-      Type: SecureString
-      Value: !Ref CosignerPairingToken
-      Description: Fireblocks Cosigner pairing token
 
   # CloudWatch Alarms for Cosigner
   HighCPUAlarm:
