@@ -2,10 +2,20 @@
 
 echo "📡 各種ツールをインストール中..."
 
+# Python3とpipをインストール
+if [ "$(id -u)" != "0" ]; then
+    sudo apt-get update && sudo apt-get install -y python3 python3-pip
+else
+    apt-get update && apt-get install -y python3 python3-pip
+fi
+
+# CloudFormation linterをインストール
+pip3 install cfn-lint
+
 # sudoなしでinstallできるか確認
 if [ "$(id -u)" != "0" ]; then
     # 非rootユーザーの場合はsudoを使用
-    sudo apt-get update && sudo apt-get install -y \
+    sudo apt-get install -y \
         git \
         dnsutils \
         libx11-xcb1 \
@@ -40,7 +50,7 @@ if [ "$(id -u)" != "0" ]; then
     sudo apt-get install -y google-chrome-stable
 else
     # rootユーザーの場合
-    apt-get update && apt-get install -y \
+    apt-get install -y \
         git \
         dnsutils \
         libx11-xcb1 \
@@ -77,3 +87,4 @@ else
 fi
 
 echo "✅ 各種ツールのインストールが完了しました。" 
+echo "📋 CloudFormation linter (cfn-lint) もインストールされました。" 

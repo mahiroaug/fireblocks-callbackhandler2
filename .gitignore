@@ -154,6 +154,11 @@ id_*
 # AWS CLI
 .aws/
 
+# 自動生成されるパラメータファイル（環境固有）
+infrastructure/parameters/*/
+# common.jsonは管理対象として残す
+!infrastructure/parameters/common.json
+
 # ==========================================
 # IDE・エディタ
 # ==========================================
@@ -290,3 +295,5 @@ deployment-temp/
 *.exe
 *.out
 *.app 
+
+

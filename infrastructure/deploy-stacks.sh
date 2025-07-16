@@ -5,6 +5,20 @@
 
 set -e
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_status() {
+    local color=$1
+    local message=$2
+    echo -e "${color}${message}${NC}"
+}
+
 # Configuration
 REGION="ap-northeast-1"
 PROFILE="dev_mtools"
@@ -37,20 +51,6 @@ SECURITY_STACK="${PROJECT_NAME}-security-${ENVIRONMENT}"
 DNS_STACK="${PROJECT_NAME}-dns-${ENVIRONMENT}"
 CALLBACK_HANDLER_STACK="${PROJECT_NAME}-callback-handler-${ENVIRONMENT}"
 COSIGNER_STACK="${PROJECT_NAME}-cosigner-${ENVIRONMENT}"
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to print colored output
-print_status() {
-    local color=$1
-    local message=$2
-    echo -e "${color}${message}${NC}"
-}
 
 # Function to check if stack exists
 stack_exists() {

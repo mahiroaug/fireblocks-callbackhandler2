@@ -44,6 +44,11 @@
         "bpruitt-goddard.mermaid-markdown-syntax-highlighting",
         "oderwat.indent-rainbow",
         "mhutchie.git-graph",
+        // CloudFormation & AWS関連拡張機能
+        "redhat.vscode-yaml",
+        "aws-toolkits.aws-toolkit-vscode",
+        "github.vscode-github-actions",
+        "ms-vscode.vscode-json"
         //"tomoki1207.pdf"
         //"esbenp.prettier-vscode" // こいつは悪いことしかしないのでnpmでinstall
       ],
