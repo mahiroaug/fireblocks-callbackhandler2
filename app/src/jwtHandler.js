@@ -84,8 +84,9 @@ async function loadCertificate(filePath, envVar, parameterName, description) {
     return Buffer.from(process.env[envVar], 'utf8');
   }
   
-  // 3. ファイルが存在する場合はファイルを使用（開発環境のみ）
-  const relativePath = `certs/${filePath}`;
+  // 3. ファイルが存在する場合はファイルを使用
+  const certsDir = process.env.CERTS_DIR || 'certs';
+  const relativePath = `${certsDir}/${filePath}`;
   
   try {
     if (fs.existsSync(relativePath)) {

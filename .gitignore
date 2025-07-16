@@ -111,12 +111,12 @@ temp/
 # 証明書・機密情報
 # ==========================================
 
-# 証明書ファイル（実際のファイルは除外）
-app/certs/*.pem
-app/certs/*.key
-app/certs/*.crt
-app/certs/*.p12
-app/certs/*.pfx
+# 証明書ファイル
+certs/*.pem
+certs/*.key
+certs/*.crt
+certs/*.p12
+certs/*.pfx
 
 # 設定ファイル（機密情報を含む可能性）
 config.json

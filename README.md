@@ -227,8 +227,8 @@ code .
 
 ```bash
 # 証明書ファイルを配置
-cp cosigner_public.pem app/certs/
-cp callback_private.pem app/certs/
+cp cosigner_public.pem certs/
+cp callback_private.pem certs/
 ```
 
 ### 3. SSL証明書の作成

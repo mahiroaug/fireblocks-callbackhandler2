@@ -1,7 +1,0 @@
-# このファイルは app/certs/ ディレクトリをGitで管理するために存在します
-# 
-# 実際の証明書ファイルは .gitignore により除外されます：
-# - cosigner_public.pem
-# - callback_private.pem
-#
-# これらのファイルは手動で配置してください 

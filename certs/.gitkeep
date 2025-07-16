@@ -1,0 +1,6 @@
+# このファイルは certs/ ディレクトリをGitで管理するために存在します
+
+# 証明書ファイル:
+# - cosigner_public.pem
+# - callback_private.pem 
+# - callback_public.pem 
