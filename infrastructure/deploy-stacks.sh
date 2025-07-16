@@ -9,14 +9,34 @@ set -e
 REGION="ap-northeast-1"
 PROFILE="dev_mtools"
 ENVIRONMENT="dev"
-STACK_PREFIX="fireblocks-callback-handler"
+
+# Load configuration from common.json
+COMMON_CONFIG="infrastructure/parameters/common.json"
+if [ -f "$COMMON_CONFIG" ]; then
+    # Check if jq is available
+    if ! command -v jq &> /dev/null; then
+        print_status "$RED" "Error: jq is required to parse common.json. Please install jq or use command line arguments."
+        exit 1
+    fi
+    
+    PROJECT_NAME=$(jq -r '.ProjectName' "$COMMON_CONFIG")
+    REGION=$(jq -r '.Region' "$COMMON_CONFIG")
+    ENVIRONMENT=$(jq -r '.Environment' "$COMMON_CONFIG")
+    
+    print_status "$GREEN" "Configuration loaded from common.json"
+    print_status "$BLUE" "Project: $PROJECT_NAME, Region: $REGION, Environment: $ENVIRONMENT"
+else
+    # Fallback values if common.json doesn't exist
+    PROJECT_NAME="e2e-monitor-cbh"
+    print_status "$YELLOW" "Warning: common.json not found, using default values"
+fi
 
 # Stack Names
-FOUNDATION_STACK="${STACK_PREFIX}-foundation-${ENVIRONMENT}"
-SECURITY_STACK="${STACK_PREFIX}-security-${ENVIRONMENT}"
-DNS_STACK="${STACK_PREFIX}-dns-${ENVIRONMENT}"
-CALLBACK_HANDLER_STACK="${STACK_PREFIX}-callback-handler-${ENVIRONMENT}"
-COSIGNER_STACK="${STACK_PREFIX}-cosigner-${ENVIRONMENT}"
+FOUNDATION_STACK="${PROJECT_NAME}-foundation-${ENVIRONMENT}"
+SECURITY_STACK="${PROJECT_NAME}-security-${ENVIRONMENT}"
+DNS_STACK="${PROJECT_NAME}-dns-${ENVIRONMENT}"
+CALLBACK_HANDLER_STACK="${PROJECT_NAME}-callback-handler-${ENVIRONMENT}"
+COSIGNER_STACK="${PROJECT_NAME}-cosigner-${ENVIRONMENT}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -132,6 +152,14 @@ create_parameter_files() {
     cat > "$env_dir/foundation.json" << EOF
 [
     {
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "${PROJECT_NAME}"
+    },
+    {
+        "ParameterKey": "Environment",
+        "ParameterValue": "${ENVIRONMENT}"
+    },
+    {
         "ParameterKey": "VpcCIDR",
         "ParameterValue": "10.0.0.0/16"
     },
@@ -142,10 +170,6 @@ create_parameter_files() {
     {
         "ParameterKey": "PrivateSubnetCIDR",
         "ParameterValue": "10.0.128.0/20"
-    },
-    {
-        "ParameterKey": "Environment",
-        "ParameterValue": "${ENVIRONMENT}"
     }
 ]
 EOF
@@ -154,8 +178,8 @@ EOF
     cat > "$env_dir/security.json" << EOF
 [
     {
-        "ParameterKey": "FoundationStackName",
-        "ParameterValue": "${FOUNDATION_STACK}"
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
@@ -168,8 +192,8 @@ EOF
     cat > "$env_dir/dns.json" << EOF
 [
     {
-        "ParameterKey": "FoundationStackName",
-        "ParameterValue": "${FOUNDATION_STACK}"
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
@@ -186,16 +210,8 @@ EOF
     cat > "$env_dir/callback-handler.json" << EOF
 [
     {
-        "ParameterKey": "FoundationStackName",
-        "ParameterValue": "${FOUNDATION_STACK}"
-    },
-    {
-        "ParameterKey": "SecurityStackName",
-        "ParameterValue": "${SECURITY_STACK}"
-    },
-    {
-        "ParameterKey": "DNSStackName",
-        "ParameterValue": "${DNS_STACK}"
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
@@ -207,7 +223,7 @@ EOF
     },
     {
         "ParameterKey": "SSLCertificateArn",
-        "ParameterValue": "arn:aws:acm:${REGION}:${AWS::AccountId}:certificate/REPLACE_ME"
+        "ParameterValue": "arn:aws:acm:${REGION}:ACCOUNT_ID:certificate/REPLACE_ME"
     }
 ]
 EOF
@@ -216,12 +232,8 @@ EOF
     cat > "$env_dir/cosigner.json" << EOF
 [
     {
-        "ParameterKey": "FoundationStackName",
-        "ParameterValue": "${FOUNDATION_STACK}"
-    },
-    {
-        "ParameterKey": "SecurityStackName",
-        "ParameterValue": "${SECURITY_STACK}"
+        "ParameterKey": "ProjectName",
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
@@ -261,31 +273,43 @@ show_help() {
     echo "  create-params     Create parameter files"
     echo "  help              Show this help message"
     echo
+    echo "Configuration Priority (highest to lowest):"
+    echo "  1. Command line arguments (-e, -r, -p)"
+    echo "  2. infrastructure/parameters/common.json"
+    echo "  3. Script defaults"
+    echo
     echo "Options:"
-    echo "  -e, --environment Environment (dev/prod, default: dev)"
-    echo "  -r, --region      AWS region (default: ap-northeast-1)"
-    echo "  -p, --profile     AWS profile (default: dev_mtools)"
+    echo "  -e, --environment Environment (overrides common.json)"
+    echo "  -r, --region      AWS region (overrides common.json)"
+    echo "  -p, --profile     AWS profile (overrides common.json)"
     echo
     echo "Examples:"
     echo "  $0 deploy-all"
     echo "  $0 deploy-all -e prod"
     echo "  $0 status"
     echo "  $0 delete-all"
+    echo
+    echo "Prerequisites:"
+    echo "  - AWS CLI configured with appropriate credentials"
+    echo "  - jq installed for JSON parsing (if using common.json)"
 }
 
-# Parse command line arguments
+# Parse command line arguments (overrides common.json values)
 while [[ $# -gt 0 ]]; do
     case $1 in
         -e|--environment)
             ENVIRONMENT="$2"
+            print_status "$BLUE" "Environment override: $ENVIRONMENT"
             shift 2
             ;;
         -r|--region)
             REGION="$2"
+            print_status "$BLUE" "Region override: $REGION"
             shift 2
             ;;
         -p|--profile)
             PROFILE="$2"
+            print_status "$BLUE" "Profile override: $PROFILE"
             shift 2
             ;;
         -h|--help)
@@ -300,11 +324,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Update stack names with new environment
-FOUNDATION_STACK="${STACK_PREFIX}-foundation-${ENVIRONMENT}"
-SECURITY_STACK="${STACK_PREFIX}-security-${ENVIRONMENT}"
-DNS_STACK="${STACK_PREFIX}-dns-${ENVIRONMENT}"
-CALLBACK_HANDLER_STACK="${STACK_PREFIX}-callback-handler-${ENVIRONMENT}"
-COSIGNER_STACK="${STACK_PREFIX}-cosigner-${ENVIRONMENT}"
+FOUNDATION_STACK="${PROJECT_NAME}-foundation-${ENVIRONMENT}"
+SECURITY_STACK="${PROJECT_NAME}-security-${ENVIRONMENT}"
+DNS_STACK="${PROJECT_NAME}-dns-${ENVIRONMENT}"
+CALLBACK_HANDLER_STACK="${PROJECT_NAME}-callback-handler-${ENVIRONMENT}"
+COSIGNER_STACK="${PROJECT_NAME}-cosigner-${ENVIRONMENT}"
 
 # Main script logic
 case "$COMMAND" in

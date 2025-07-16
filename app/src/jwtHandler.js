@@ -304,7 +304,7 @@ function createCallbackResponse(action, requestId, rejectionReason = null) {
     action: action,
     requestId: requestId,
     timestamp: new Date().toISOString(),
-    issuer: "fireblocks-callback-handler"
+    issuer: "e2e-monitor-cbh"
   };
   
   // REJECTの場合のみ拒否理由を追加

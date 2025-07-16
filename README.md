@@ -50,14 +50,14 @@ flowchart TB
         end
         
         IGW["🌐 Internet Gateway"]
-    end
-    
-    subgraph External["📡 External Resources"]
+        end
+        
+        subgraph External["📡 External Resources"]
         FireblocksSaaS["🔥 Fireblocks SaaS<br/>(api.fireblocks.io)"]
-        SSM["🔐 SSM Parameter Store<br/>(証明書管理)"]
-        ECR["📦 ECR<br/>(コンテナイメージ)"]
-        CloudWatch["📊 CloudWatch Logs<br/>(監視)"]
-    end
+            SSM["🔐 SSM Parameter Store<br/>(証明書管理)"]
+            ECR["📦 ECR<br/>(コンテナイメージ)"]
+            CloudWatch["📊 CloudWatch Logs<br/>(監視)"]
+        end
     
     IGW -->|"Internet Access"| NAT
     NAT -->|"外部通信"| PrivateSubnet
@@ -165,7 +165,7 @@ VPC:
     EnableDnsSupport: true
     Tags:
       - Key: Name
-        Value: fireblocks-callback-handler-vpc
+        Value: e2e-monitor-cbh-vpc
 
 # Public Subnet（NAT Gateway用）
 PublicSubnet:
@@ -583,7 +583,7 @@ ECSSecurityGroup:
 ## 📁 プロジェクト構造
 
 ```
-fireblocks-callback-handler/
+e2e-monitor-cbh/
 ├── README.md                        # プロジェクト概要
 ├── .gitignore                       # Git除外設定
 ├── app/                             # アプリケーション
@@ -647,11 +647,43 @@ fireblocks-callback-handler/
 
 ## 🚀 クイックスタート
 
-### 前提条件
+### 開発環境のセットアップ
+
+#### オプション1: DevContainer使用（推奨）
+
+```bash
+# 1. VS Codeでプロジェクトを開く
+code .
+
+# 2. DevContainerで再オープン
+# Command Palette (Ctrl+Shift+P) → "Dev Containers: Reopen in Container"
+```
+
+DevContainerには以下が自動で含まれます：
+- AWS CLI
+- jq (JSON processor)
+- yq (YAML processor)
+- Node.js 22
+- Docker
+- 必要なVS Code拡張機能
+
+#### オプション2: ローカル環境セットアップ
+
+##### 前提条件
 
 - AWS CLI (設定済み)
 - Docker
+- jq (JSON processor)
+- Node.js 22+
 - 適切なAWS権限
+
+```bash
+# jqのインストール (Ubuntu/Debian)
+sudo apt install jq
+
+# jqのインストール (macOS)
+brew install jq
+```
 
 ### 1. 証明書の準備
 
@@ -661,15 +693,30 @@ cp cosigner_public.pem app/certs/
 cp callback_private.pem app/certs/
 ```
 
-### 2. 環境のデプロイメント
+### 2. 環境設定
 
 ```bash
-# 基本デプロイメント（既存機能）
-cd infrastructure
-./deploy.sh
+# AWS認証情報の設定
+aws configure --profile dev_mtools
 
-# 拡張機能込みデプロイメント（新機能）
-./deploy.sh --enable-nitro-enclave --enable-vpc-endpoints --enable-session-manager
+# プロジェクト設定の確認
+cat infrastructure/parameters/common.json
+```
+
+### 3. 環境のデプロイメント
+
+```bash
+# 設定状況の確認
+./infrastructure/deploy-stacks.sh status
+
+# 全スタックのデプロイ
+./infrastructure/deploy-stacks.sh deploy-all
+
+# 特定の環境でのデプロイ
+./infrastructure/deploy-stacks.sh deploy-all -e prod
+
+# ヘルプの表示
+./infrastructure/deploy-stacks.sh help
 ```
 
 ### 3. Cosignerの設定

@@ -49,7 +49,7 @@
 ## 📁 プロジェクト構造
 
 ```
-fireblocks-callback-handler/
+e2e-monitor-cbh/
 ├── infrastructure/
 │   ├── stacks/                           # CloudFormationテンプレート
 │   │   ├── 01-foundation.yaml           # 基盤スタック
@@ -202,7 +202,7 @@ export STACK_PREFIX="your-custom-prefix"
 
 ```bash
 # ECSログの確認
-aws logs describe-log-groups --log-group-name-prefix "/aws/ecs/fireblocks-callback-handler"
+aws logs describe-log-groups --log-group-name-prefix "/aws/ecs/e2e-monitor-cbh"
 
 # Cosignerログの確認
 aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/cosigner"
@@ -271,7 +271,7 @@ cat infrastructure/parameters/dev/cosigner.json
 循環参照エラーが発生した場合：
 ```bash
 # セキュリティスタックの削除と再作成
-aws cloudformation delete-stack --stack-name fireblocks-callback-handler-security-dev
+aws cloudformation delete-stack --stack-name e2e-monitor-cbh-security-dev
 ./infrastructure/deploy-stacks.sh deploy-security
 ```
 

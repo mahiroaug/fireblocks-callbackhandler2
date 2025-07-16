@@ -2,20 +2,15 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Fireblocks Callback Handler - Cosigner Stack (EC2, Nitro Enclave)'
 
 Parameters:
-  FoundationStackName:
+  ProjectName:
     Type: String
-    Description: Name of the foundation stack
-    Default: fireblocks-foundation
-
-  SecurityStackName:
-    Type: String
-    Description: Name of the security stack
-    Default: fireblocks-security
+    Default: fireblocks-cbh
+    Description: Project name for resource naming
 
   Environment:
     Type: String
     Default: dev
-    AllowedValues: [dev, prod]
+    AllowedValues: [dev, stg, prod]
     Description: Environment name
 
   InstanceType:
@@ -48,7 +43,7 @@ Resources:
   CosignerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/ec2/cosigner-${Environment}'
+      LogGroupName: !Sub '/aws/ec2/${ProjectName}-cosigner-${Environment}'
       RetentionInDays: 30
 
   # Cosigner EC2 Instance
@@ -58,11 +53,11 @@ Resources:
       InstanceType: !Ref InstanceType
       ImageId: ami-03598bf9d15814511  # Amazon Linux 2023 (ap-northeast-1)
       SubnetId: 
-        Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
       SecurityGroupIds:
-        - Fn::ImportValue: !Sub ${SecurityStackName}-CosignerSecurityGroup-ID
+        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerSecurityGroup-ID
       IamInstanceProfile: 
-        Fn::ImportValue: !Sub ${SecurityStackName}-CosignerInstanceProfile-ARN
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerInstanceProfile-ARN
       KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
       EnclaveOptions:
         Enabled: true
@@ -111,19 +106,23 @@ Resources:
           Count: 1
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-cosigner-${Environment}
+          Value: !Sub ${ProjectName}-cosigner-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Stack
           Value: cosigner
         - Key: Type
           Value: CosignerInstance
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # CloudWatch Agent Configuration
   CloudWatchAgentConfig:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub '/aws/ec2/cosigner-${Environment}/cloudwatch-agent-config'
+      Name: !Sub '/aws/ec2/${ProjectName}-cosigner-${Environment}/cloudwatch-agent-config'
       Type: String
       Value: !Sub |
         {
@@ -180,7 +179,7 @@ Resources:
   CosignerInstallationScriptParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub '/fireblocks-callback-infrastructure/cosigner-${Environment}/installation-script'
+      Name: !Sub '/fireblocks-callback-infrastructure/${ProjectName}-cosigner-${Environment}/installation-script'
       Type: String
       Value: !Ref CosignerInstallationScript
       Description: Cosigner installation script URL
@@ -189,7 +188,7 @@ Resources:
   CosignerPairingTokenParam:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub '/fireblocks-callback-infrastructure/cosigner-${Environment}/pairing-token'
+      Name: !Sub '/fireblocks-callback-infrastructure/${ProjectName}-cosigner-${Environment}/pairing-token'
       Type: SecureString
       Value: !Ref CosignerPairingToken
       Description: Fireblocks Cosigner pairing token
@@ -198,7 +197,7 @@ Resources:
   HighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub fireblocks-cosigner-high-cpu-${Environment}
+      AlarmName: !Sub ${ProjectName}-cosigner-high-cpu-${Environment}
       AlarmDescription: 'High CPU utilization for Cosigner instance'
       MetricName: CPUUtilization
       Namespace: AWS/EC2
@@ -215,7 +214,7 @@ Resources:
   HighMemoryAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub fireblocks-cosigner-high-memory-${Environment}
+      AlarmName: !Sub ${ProjectName}-cosigner-high-memory-${Environment}
       AlarmDescription: 'High memory utilization for Cosigner instance'
       MetricName: mem_used_percent
       Namespace: CWAgent
@@ -232,7 +231,7 @@ Resources:
   StatusCheckAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub fireblocks-cosigner-status-check-${Environment}
+      AlarmName: !Sub ${ProjectName}-cosigner-status-check-${Environment}
       AlarmDescription: 'Status check failed for Cosigner instance'
       MetricName: StatusCheckFailed
       Namespace: AWS/EC2
@@ -251,22 +250,22 @@ Outputs:
     Description: Cosigner EC2 Instance ID
     Value: !Ref CosignerInstance
     Export:
-      Name: !Sub ${AWS::StackName}-CosignerInstance-ID
+      Name: !Sub ${ProjectName}-${Environment}-CosignerInstance-ID
 
   CosignerPrivateIP:
     Description: Cosigner EC2 Instance Private IP
     Value: !GetAtt CosignerInstance.PrivateIp
     Export:
-      Name: !Sub ${AWS::StackName}-CosignerInstance-PrivateIP
+      Name: !Sub ${ProjectName}-${Environment}-CosignerInstance-PrivateIP
 
   CosignerLogGroupName:
     Description: CloudWatch Log Group Name for Cosigner
     Value: !Ref CosignerLogGroup
     Export:
-      Name: !Sub ${AWS::StackName}-CosignerLogGroup-Name
+      Name: !Sub ${ProjectName}-${Environment}-CosignerLogGroup-Name
 
   SessionManagerCommand:
     Description: AWS CLI command to connect to Cosigner via Session Manager
     Value: !Sub 'aws ssm start-session --target ${CosignerInstance} --region ${AWS::Region}'
     Export:
-      Name: !Sub ${AWS::StackName}-SessionManager-Command 
+      Name: !Sub ${ProjectName}-${Environment}-SessionManager-Command 

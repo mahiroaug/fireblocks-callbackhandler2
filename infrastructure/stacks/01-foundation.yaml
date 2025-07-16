@@ -2,6 +2,17 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Fireblocks Callback Handler - Foundation Stack (VPC, Subnets, Gateways)'
 
 Parameters:
+  ProjectName:
+    Type: String
+    Default: fireblocks-cbh
+    Description: Project name for resource naming
+  
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stg, prod]
+    Description: Environment name
+  
   VpcCIDR:
     Type: String
     Default: 10.0.0.0/16
@@ -16,12 +27,6 @@ Parameters:
     Type: String
     Default: 10.0.128.0/20
     Description: CIDR block for Private Subnet (Cosigner + ECS)
-  
-  Environment:
-    Type: String
-    Default: dev
-    AllowedValues: [dev, prod]
-    Description: Environment name
 
 Resources:
   # VPC Configuration
@@ -33,11 +38,15 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-callback-vpc-${Environment}
+          Value: !Sub ${ProjectName}-vpc-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Stack
           Value: foundation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Public Subnet (NAT Gateway用)
   PublicSubnet:
@@ -49,11 +58,15 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-public-subnet-${Environment}
+          Value: !Sub ${ProjectName}-public-subnet-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Type
           Value: Public
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Private Subnet (Cosigner + ECS用)
   PrivateSubnet:
@@ -65,11 +78,15 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-private-subnet-${Environment}
+          Value: !Sub ${ProjectName}-private-subnet-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Type
           Value: Private
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Internet Gateway
   InternetGateway:
@@ -77,9 +94,13 @@ Resources:
     Properties:
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-igw-${Environment}
+          Value: !Sub ${ProjectName}-igw-${Environment}
         - Key: Environment
           Value: !Ref Environment
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Internet Gateway Attachment
   InternetGatewayAttachment:
@@ -96,9 +117,13 @@ Resources:
       Domain: vpc
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-nat-eip-${Environment}
+          Value: !Sub ${ProjectName}-nat-eip-${Environment}
         - Key: Environment
           Value: !Ref Environment
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # NAT Gateway (Fireblocks SaaS通信用)
   NATGateway:
@@ -108,9 +133,13 @@ Resources:
       SubnetId: !Ref PublicSubnet
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-nat-gateway-${Environment}
+          Value: !Sub ${ProjectName}-nat-gateway-${Environment}
         - Key: Environment
           Value: !Ref Environment
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Public Route Table
   PublicRouteTable:
@@ -119,9 +148,13 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-public-rt-${Environment}
+          Value: !Sub ${ProjectName}-public-rt-${Environment}
         - Key: Environment
           Value: !Ref Environment
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Public Route (Internet Gateway)
   PublicRoute:
@@ -146,9 +179,13 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub fireblocks-private-rt-${Environment}
+          Value: !Sub ${ProjectName}-private-rt-${Environment}
         - Key: Environment
           Value: !Ref Environment
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Private Route (NAT Gateway)
   PrivateRoute:
@@ -170,40 +207,46 @@ Outputs:
     Description: VPC ID
     Value: !Ref VPC
     Export:
-      Name: !Sub ${AWS::StackName}-VPC-ID
+      Name: !Sub ${ProjectName}-${Environment}-VPC-ID
 
   PublicSubnetId:
     Description: Public Subnet ID
     Value: !Ref PublicSubnet
     Export:
-      Name: !Sub ${AWS::StackName}-PublicSubnet-ID
+      Name: !Sub ${ProjectName}-${Environment}-PublicSubnet-ID
 
   PrivateSubnetId:
     Description: Private Subnet ID
     Value: !Ref PrivateSubnet
     Export:
-      Name: !Sub ${AWS::StackName}-PrivateSubnet-ID
+      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
 
   PrivateRouteTableId:
     Description: Private Route Table ID
     Value: !Ref PrivateRouteTable
     Export:
-      Name: !Sub ${AWS::StackName}-PrivateRouteTable-ID
+      Name: !Sub ${ProjectName}-${Environment}-PrivateRouteTable-ID
 
   VPCCidrBlock:
     Description: VPC CIDR Block
     Value: !Ref VpcCIDR
     Export:
-      Name: !Sub ${AWS::StackName}-VPC-CIDR
+      Name: !Sub ${ProjectName}-${Environment}-VPC-CIDR
 
   NATGatewayId:
     Description: NAT Gateway ID
     Value: !Ref NATGateway
     Export:
-      Name: !Sub ${AWS::StackName}-NATGateway-ID
+      Name: !Sub ${ProjectName}-${Environment}-NATGateway-ID
 
   Environment:
     Description: Environment name
     Value: !Ref Environment
     Export:
-      Name: !Sub ${AWS::StackName}-Environment 
+      Name: !Sub ${ProjectName}-${Environment}-Environment
+
+  ProjectName:
+    Description: Project name
+    Value: !Ref ProjectName
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ProjectName 

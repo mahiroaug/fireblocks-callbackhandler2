@@ -2,15 +2,15 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Fireblocks Callback Handler - DNS Stack (Private Hosted Zone)'
 
 Parameters:
-  FoundationStackName:
+  ProjectName:
     Type: String
-    Description: Name of the foundation stack
-    Default: fireblocks-foundation
+    Default: fireblocks-cbh
+    Description: Project name for resource naming
 
   Environment:
     Type: String
     Default: dev
-    AllowedValues: [dev, prod]
+    AllowedValues: [dev, stg, prod]
     Description: Environment name
 
   DomainName:
@@ -26,27 +26,31 @@ Resources:
       Name: !Ref DomainName
       VPCs:
         - VPCId: 
-            Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+            Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
           VPCRegion: !Ref AWS::Region
       HostedZoneConfig:
         Comment: !Sub 'Private hosted zone for Fireblocks callback handler - ${Environment}'
       HostedZoneTags:
         - Key: Name
-          Value: !Sub fireblocks-callback-handler-zone-${Environment}
+          Value: !Sub ${ProjectName}-phz-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Stack
           Value: dns
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
 Outputs:
   PrivateHostedZoneId:
     Description: Private Hosted Zone ID
     Value: !Ref PrivateHostedZone
     Export:
-      Name: !Sub ${AWS::StackName}-PrivateHostedZone-ID
+      Name: !Sub ${ProjectName}-${Environment}-PrivateHostedZone-ID
 
   DomainName:
     Description: Domain name for private hosted zone
     Value: !Ref DomainName
     Export:
-      Name: !Sub ${AWS::StackName}-DomainName 
+      Name: !Sub ${ProjectName}-${Environment}-DomainName 

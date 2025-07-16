@@ -1,7 +1,7 @@
 {
-  "name": "fireblocks-callback-handler",
+  "name": "e2e-monitor-cbh",
   "version": "1.0.0",
-  "description": "Fireblocks Callback Handler for ECS Fargate",
+  "description": "E2E Monitor Callback Handler for ECS Fargate",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
