@@ -1,0 +1,272 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fireblocks Callback Handler - Cosigner Stack (EC2, Nitro Enclave)'
+
+Parameters:
+  FoundationStackName:
+    Type: String
+    Description: Name of the foundation stack
+    Default: fireblocks-foundation
+
+  SecurityStackName:
+    Type: String
+    Description: Name of the security stack
+    Default: fireblocks-security
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Environment name
+
+  InstanceType:
+    Type: String
+    Default: c5.xlarge
+    AllowedValues: [c5.large, c5.xlarge, c5.2xlarge, c5.4xlarge]
+    Description: EC2 instance type for Cosigner (Nitro Enclave compatible)
+
+  KeyPairName:
+    Type: String
+    Description: EC2 Key Pair name for emergency access
+    Default: ""
+
+  CosignerPairingToken:
+    Type: String
+    Description: Fireblocks Cosigner pairing token
+    NoEcho: true
+    Default: ""
+
+  CosignerInstallationScript:
+    Type: String
+    Description: Cosigner installation script URL
+    Default: ""
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+
+Resources:
+  # CloudWatch Log Group for Cosigner
+  CosignerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ec2/cosigner-${Environment}'
+      RetentionInDays: 30
+
+  # Cosigner EC2 Instance
+  CosignerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: ami-03598bf9d15814511  # Amazon Linux 2023 (ap-northeast-1)
+      SubnetId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${SecurityStackName}-CosignerSecurityGroup-ID
+      IamInstanceProfile: 
+        Fn::ImportValue: !Sub ${SecurityStackName}-CosignerInstanceProfile-ARN
+      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
+      EnclaveOptions:
+        Enabled: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y amazon-ssm-agent amazon-cloudwatch-agent
+          
+          # Enable and start SSM Agent
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+          
+          # Install Nitro Enclaves CLI
+          amazon-linux-extras install aws-nitro-enclaves-cli
+          
+          # Configure Nitro Enclaves
+          usermod -aG ne ec2-user
+          
+          # Configure Nitro Enclaves allocator
+          systemctl enable nitro-enclaves-allocator.service
+          systemctl start nitro-enclaves-allocator.service
+          
+          # Install CloudWatch Agent
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+            -a fetch-config -m ec2 -s -c ssm:${CloudWatchAgentConfig}
+          
+          # Create cosigner directory
+          mkdir -p /home/ec2-user/cosigner
+          chown ec2-user:ec2-user /home/ec2-user/cosigner
+          
+          # Log installation completion
+          echo "Cosigner instance initialization completed" >> /var/log/cosigner-init.log
+          
+          # Store environment variables for later use
+          echo "COSIGNER_PAIRING_TOKEN=${CosignerPairingToken}" >> /home/ec2-user/.env
+          echo "COSIGNER_INSTALLATION_SCRIPT=${CosignerInstallationScript}" >> /home/ec2-user/.env
+          echo "ENVIRONMENT=${Environment}" >> /home/ec2-user/.env
+          chown ec2-user:ec2-user /home/ec2-user/.env
+          
+          # Signal completion
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource CosignerInstance --region ${AWS::Region}
+      CreationPolicy:
+        ResourceSignal:
+          Timeout: PT10M
+          Count: 1
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-cosigner-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: cosigner
+        - Key: Type
+          Value: CosignerInstance
+
+  # CloudWatch Agent Configuration
+  CloudWatchAgentConfig:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/aws/ec2/cosigner-${Environment}/cloudwatch-agent-config'
+      Type: String
+      Value: !Sub |
+        {
+          "logs": {
+            "logs_collected": {
+              "files": {
+                "collect_list": [
+                  {
+                    "file_path": "/var/log/cosigner-init.log",
+                    "log_group_name": "${CosignerLogGroup}",
+                    "log_stream_name": "{instance_id}/cosigner-init"
+                  },
+                  {
+                    "file_path": "/var/log/nitro-enclaves-allocator.log",
+                    "log_group_name": "${CosignerLogGroup}",
+                    "log_stream_name": "{instance_id}/nitro-enclaves"
+                  }
+                ]
+              }
+            }
+          },
+          "metrics": {
+            "namespace": "CWAgent",
+            "metrics_collected": {
+              "cpu": {
+                "measurement": [
+                  "cpu_usage_idle",
+                  "cpu_usage_iowait",
+                  "cpu_usage_user",
+                  "cpu_usage_system"
+                ],
+                "metrics_collection_interval": 60
+              },
+              "disk": {
+                "measurement": [
+                  "used_percent"
+                ],
+                "metrics_collection_interval": 60,
+                "resources": [
+                  "*"
+                ]
+              },
+              "mem": {
+                "measurement": [
+                  "mem_used_percent"
+                ],
+                "metrics_collection_interval": 60
+              }
+            }
+          }
+        }
+
+  # Cosigner Installation Script Parameter
+  CosignerInstallationScriptParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/fireblocks-callback-infrastructure/cosigner-${Environment}/installation-script'
+      Type: String
+      Value: !Ref CosignerInstallationScript
+      Description: Cosigner installation script URL
+
+  # Cosigner Pairing Token Parameter
+  CosignerPairingTokenParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/fireblocks-callback-infrastructure/cosigner-${Environment}/pairing-token'
+      Type: SecureString
+      Value: !Ref CosignerPairingToken
+      Description: Fireblocks Cosigner pairing token
+
+  # CloudWatch Alarms for Cosigner
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub fireblocks-cosigner-high-cpu-${Environment}
+      AlarmDescription: 'High CPU utilization for Cosigner instance'
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref CosignerInstance
+      TreatMissingData: notBreaching
+
+  HighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub fireblocks-cosigner-high-memory-${Environment}
+      AlarmDescription: 'High memory utilization for Cosigner instance'
+      MetricName: mem_used_percent
+      Namespace: CWAgent
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref CosignerInstance
+      TreatMissingData: notBreaching
+
+  StatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub fireblocks-cosigner-status-check-${Environment}
+      AlarmDescription: 'Status check failed for Cosigner instance'
+      MetricName: StatusCheckFailed
+      Namespace: AWS/EC2
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref CosignerInstance
+      TreatMissingData: notBreaching
+
+Outputs:
+  CosignerInstanceId:
+    Description: Cosigner EC2 Instance ID
+    Value: !Ref CosignerInstance
+    Export:
+      Name: !Sub ${AWS::StackName}-CosignerInstance-ID
+
+  CosignerPrivateIP:
+    Description: Cosigner EC2 Instance Private IP
+    Value: !GetAtt CosignerInstance.PrivateIp
+    Export:
+      Name: !Sub ${AWS::StackName}-CosignerInstance-PrivateIP
+
+  CosignerLogGroupName:
+    Description: CloudWatch Log Group Name for Cosigner
+    Value: !Ref CosignerLogGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-CosignerLogGroup-Name
+
+  SessionManagerCommand:
+    Description: AWS CLI command to connect to Cosigner via Session Manager
+    Value: !Sub 'aws ssm start-session --target ${CosignerInstance} --region ${AWS::Region}'
+    Export:
+      Name: !Sub ${AWS::StackName}-SessionManager-Command 

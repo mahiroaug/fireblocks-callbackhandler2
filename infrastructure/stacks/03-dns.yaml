@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fireblocks Callback Handler - DNS Stack (Private Hosted Zone)'
+
+Parameters:
+  FoundationStackName:
+    Type: String
+    Description: Name of the foundation stack
+    Default: fireblocks-foundation
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Environment name
+
+  DomainName:
+    Type: String
+    Default: callback-handler.internal
+    Description: Domain name for private hosted zone
+
+Resources:
+  # Private Hosted Zone
+  PrivateHostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      VPCs:
+        - VPCId: 
+            Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+          VPCRegion: !Ref AWS::Region
+      HostedZoneConfig:
+        Comment: !Sub 'Private hosted zone for Fireblocks callback handler - ${Environment}'
+      HostedZoneTags:
+        - Key: Name
+          Value: !Sub fireblocks-callback-handler-zone-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: dns
+
+Outputs:
+  PrivateHostedZoneId:
+    Description: Private Hosted Zone ID
+    Value: !Ref PrivateHostedZone
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateHostedZone-ID
+
+  DomainName:
+    Description: Domain name for private hosted zone
+    Value: !Ref DomainName
+    Export:
+      Name: !Sub ${AWS::StackName}-DomainName 

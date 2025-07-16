@@ -1,0 +1,382 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fireblocks Callback Handler - Security Stack (Security Groups, IAM, VPC Endpoints)'
+
+Parameters:
+  FoundationStackName:
+    Type: String
+    Description: Name of the foundation stack
+    Default: fireblocks-foundation
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Environment name
+
+Resources:
+  # Cosigner用セキュリティグループ
+  CosignerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Cosigner (Nitro Enclave)
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      SecurityGroupEgress:
+        # ALBへのHTTPS通信
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref ALBSecurityGroup
+          Description: 'HTTPS to ALB'
+        # VPCエンドポイントへの通信
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
+          Description: 'HTTPS to VPC Endpoints'
+        # Fireblocks SaaS API通信（NAT Gateway経由）
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: 'HTTPS to Fireblocks SaaS API'
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-cosigner-sg-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+  # ALB用セキュリティグループ
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref CosignerSecurityGroup
+          Description: 'HTTPS from Cosigner'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          DestinationSecurityGroupId: !Ref ECSSecurityGroup
+          Description: 'HTTP to ECS'
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-alb-sg-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+  # VPCエンドポイント用セキュリティグループ
+  VPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for VPC Endpoints
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref CosignerSecurityGroup
+          Description: 'HTTPS from Cosigner'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          Description: 'HTTPS from ECS'
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-vpc-endpoint-sg-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+  # ECS用セキュリティグループ
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS Fargate
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: 'HTTP from ALB'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
+          Description: 'HTTPS to VPC Endpoints'
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-ecs-sg-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+  # S3 Gateway Endpoint
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateRouteTable-ID
+
+  # SSM Interface Endpoint
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 'ssm:*'
+            Resource: '*'
+
+  # SSM Messages Endpoint
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  # EC2 Messages Endpoint
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  # ECR VPC Endpoint
+  ECREndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  # CloudWatch Logs VPC Endpoint
+  CloudWatchLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
+  # Cosigner IAM Role
+  CosignerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub FireblocksCosignerRole-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: CosignerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/cosigner*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+  # Cosigner Instance Profile
+  CosignerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref CosignerRole
+
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub FireblocksECSTaskExecutionRole-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECSTaskExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+  # ECS Task Role
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub FireblocksECSTaskRole-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ECSTaskPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+
+Outputs:
+  CosignerSecurityGroupId:
+    Description: Cosigner Security Group ID
+    Value: !Ref CosignerSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-CosignerSecurityGroup-ID
+
+  ALBSecurityGroupId:
+    Description: ALB Security Group ID
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ALBSecurityGroup-ID
+
+  ECSSecurityGroupId:
+    Description: ECS Security Group ID
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSSecurityGroup-ID
+
+  VPCEndpointSecurityGroupId:
+    Description: VPC Endpoint Security Group ID
+    Value: !Ref VPCEndpointSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-VPCEndpointSecurityGroup-ID
+
+  CosignerRoleArn:
+    Description: Cosigner IAM Role ARN
+    Value: !GetAtt CosignerRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CosignerRole-ARN
+
+  CosignerInstanceProfileArn:
+    Description: Cosigner Instance Profile ARN
+    Value: !GetAtt CosignerInstanceProfile.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CosignerInstanceProfile-ARN
+
+  ECSTaskExecutionRoleArn:
+    Description: ECS Task Execution Role ARN
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSTaskExecutionRole-ARN
+
+  ECSTaskRoleArn:
+    Description: ECS Task Role ARN
+    Value: !GetAtt ECSTaskRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSTaskRole-ARN 

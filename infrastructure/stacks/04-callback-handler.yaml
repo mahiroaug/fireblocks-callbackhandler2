@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fireblocks Callback Handler - Callback Handler Stack (ALB, ECS Fargate)'
+
+Parameters:
+  FoundationStackName:
+    Type: String
+    Description: Name of the foundation stack
+    Default: fireblocks-foundation
+
+  SecurityStackName:
+    Type: String
+    Description: Name of the security stack
+    Default: fireblocks-security
+
+  DNSStackName:
+    Type: String
+    Description: Name of the DNS stack
+    Default: fireblocks-dns
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Environment name
+
+  ContainerImage:
+    Type: String
+    Description: ECR image URI for callback handler
+    Default: "nginx:latest"  # プレースホルダー
+
+  SSLCertificateArn:
+    Type: String
+    Description: SSL certificate ARN for ALB
+    Default: ""
+
+Resources:
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ecs/fireblocks-callback-handler-${Environment}'
+      RetentionInDays: 30
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub fireblocks-callback-handler-cluster-${Environment}
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-callback-handler-cluster-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: callback-handler
+
+  # ECS Task Definition
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub fireblocks-callback-handler-${Environment}
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 512
+      ExecutionRoleArn: 
+        Fn::ImportValue: !Sub ${SecurityStackName}-ECSTaskExecutionRole-ARN
+      TaskRoleArn: 
+        Fn::ImportValue: !Sub ${SecurityStackName}-ECSTaskRole-ARN
+      ContainerDefinitions:
+        - Name: callback-handler
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: !Ref Environment
+            - Name: LOG_LEVEL
+              Value: info
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:3000/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: callback-handler
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub fireblocks-callback-alb-${Environment}
+      Type: application
+      Scheme: internal
+      IpAddressType: ipv4
+      Subnets:
+        - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+      SecurityGroups:
+        - Fn::ImportValue: !Sub ${SecurityStackName}-ALBSecurityGroup-ID
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-callback-alb-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: callback-handler
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub fireblocks-callback-tg-${Environment}
+      Port: 3000
+      Protocol: HTTP
+      VpcId: 
+        Fn::ImportValue: !Sub ${FoundationStackName}-VPC-ID
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-callback-tg-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: callback-handler
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01
+      Certificates:
+        - CertificateArn: !Ref SSLCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # DNS Record for ALB
+  ALBDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: 
+        Fn::ImportValue: !Sub ${DNSStackName}-PrivateHostedZone-ID
+      Name: 
+        Fn::ImportValue: !Sub ${DNSStackName}-DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApplicationLoadBalancer.DNSName
+        HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: true
+      Comment: 'A record pointing to ALB for callback handler'
+
+  # ECS Service
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: !Sub fireblocks-callback-handler-service-${Environment}
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ECSTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - Fn::ImportValue: !Sub ${SecurityStackName}-ECSSecurityGroup-ID
+          Subnets:
+            - Fn::ImportValue: !Sub ${FoundationStackName}-PrivateSubnet-ID
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - ContainerName: callback-handler
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+      HealthCheckGracePeriodSeconds: 300
+      Tags:
+        - Key: Name
+          Value: !Sub fireblocks-callback-handler-service-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: callback-handler
+
+  # CloudWatch Alarms
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub fireblocks-callback-handler-high-cpu-${Environment}
+      AlarmDescription: 'High CPU utilization for callback handler'
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ServiceName
+          Value: !Ref ECSService
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+      TreatMissingData: notBreaching
+
+  HighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub fireblocks-callback-handler-high-memory-${Environment}
+      AlarmDescription: 'High memory utilization for callback handler'
+      MetricName: MemoryUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ServiceName
+          Value: !Ref ECSService
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+      TreatMissingData: notBreaching
+
+Outputs:
+  ECSClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSCluster-Name
+
+  ECSServiceName:
+    Description: ECS Service Name
+    Value: !Ref ECSService
+    Export:
+      Name: !Sub ${AWS::StackName}-ECSService-Name
+
+  ApplicationLoadBalancerDNS:
+    Description: Application Load Balancer DNS Name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-ALB-DNS
+
+  ApplicationLoadBalancerArn:
+    Description: Application Load Balancer ARN
+    Value: !Ref ApplicationLoadBalancer
+    Export:
+      Name: !Sub ${AWS::StackName}-ALB-ARN
+
+  CallbackHandlerURL:
+    Description: Callback Handler URL
+    Value: !Sub 
+      - https://${DomainName}
+      - DomainName: 
+          Fn::ImportValue: !Sub ${DNSStackName}-DomainName
+    Export:
+      Name: !Sub ${AWS::StackName}-CallbackHandler-URL 
