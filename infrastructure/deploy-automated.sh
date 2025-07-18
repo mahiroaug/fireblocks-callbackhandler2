@@ -73,6 +73,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_STACKS="$2"
             shift 2
             ;;
+        --only-stacks)
+            ONLY_STACKS="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -90,6 +94,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -p, --profile     AWS profile"
               echo "  --from-stack      Start deployment from specific stack (foundation, security, dns, codebuild, callback, cosigner)"
   echo "  --skip-stacks     Skip specific stacks (comma-separated: foundation,security,dns,codebuild,callback,cosigner)"
+            echo "  --only-stacks     Run only specified stacks (comma-separated), overrides --from/--skip"
             echo "  --dry-run         Show what would be deployed without actually deploying"
             echo "  --status          Show current status of all stacks"
             echo "  -h, --help        Show this help"
@@ -203,6 +208,14 @@ show_all_stacks_status() {
 # Function to check if stack should be skipped
 should_skip_stack() {
     local stack_short_name=$1
+    # if ONLY_STACKS is set, skip anything not in list
+    if [ -n "$ONLY_STACKS" ]; then
+        echo "$ONLY_STACKS" | tr ',' '\n' | grep -q "^$stack_short_name$"
+        if [ $? -ne 0 ]; then
+            return 0  # skip
+        fi
+        return 1      # do not skip
+    fi
     if [ -n "$SKIP_STACKS" ]; then
         echo "$SKIP_STACKS" | grep -q "$stack_short_name"
         return $?
@@ -505,11 +518,13 @@ main() {
     if [ "$started" == "true" ] && ! should_skip_stack "codebuild"; then
         print_status "$BLUE" "🔨 Step 5: Deploying CodeBuild automation (with ECR)..."
         
-        # Update ECR Repository URI in existing parameter file
+        # Update (overwrite) ECR Repository URI in codebuild.json every time
         if [ -f "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" ]; then
-            # Replace placeholder with actual ECR URI
-            sed -i.bak "s|PLACEHOLDER_ECR_REPOSITORY_URI|${ECR_REPO_URI}|" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json"
-            print_status "$GREEN" "✅ Updated ECR Repository URI in codebuild.json"
+            tmp_json=$(mktemp)
+            jq --arg uri "${ECR_REPO_URI}" 'map(if .ParameterKey=="ECRRepositoryURI" then .ParameterValue=$uri else . end)' \
+              "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" > "$tmp_json" && \
+              mv "$tmp_json" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json"
+            print_status "$GREEN" "✅ Set ECRRepositoryURI to $ECR_REPO_URI in codebuild.json"
         else
             print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/codebuild.json"
             print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"
@@ -518,6 +533,40 @@ main() {
         
         if deploy_stack "$CODEBUILD_STACK" "infrastructure/stacks/04-codebuild-automation.yaml" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" "CodeBuild + ECR"; then
             print_status "$GREEN" "ECR Repository URI: $ECR_REPO_URI"
+
+            # -------------------------------------------
+            # 🔨 追加: CodeBuild で初回 Docker ビルドを自動実行
+            # -------------------------------------------
+            print_status "$BLUE" "🏃‍♂️  Starting initial CodeBuild build (Docker image push)..."
+            BUILD_ID=$(aws codebuild start-build \
+                --project-name "${PROJECT_NAME}-docker-build-${ENVIRONMENT}" \
+                --region "$REGION" \
+                --profile "$PROFILE" \
+                --query 'build.id' --output text --no-paginate) || {
+                print_status "$RED" "❌ Failed to start CodeBuild build"
+                return 1
+            }
+
+            print_status "$BLUE" "⌛ Waiting for CodeBuild build to complete... (id: $BUILD_ID)"
+            aws codebuild batch-get-builds --ids "$BUILD_ID" --region "$REGION" --profile "$PROFILE" --no-paginate \
+                | jq -r '.builds[0].buildStatus' | grep -q -E 'IN_PROGRESS|SUCCEEDED|FAILED' # ensure jq installed earlier
+
+            # ポーリングループ（30秒間隔）
+            while true; do
+              STATUS=$(aws codebuild batch-get-builds --ids "$BUILD_ID" --region "$REGION" --profile "$PROFILE" --query 'builds[0].buildStatus' --output text --no-paginate)
+              if [ "$STATUS" == "IN_PROGRESS" ] || [ "$STATUS" == "QUEUED" ]; then
+                sleep 30
+              else
+                break
+              fi
+            done
+
+            if [ "$STATUS" == "SUCCEEDED" ]; then
+              print_status "$GREEN" "✅ CodeBuild build succeeded; Docker image pushed"
+            else
+              print_status "$RED" "❌ CodeBuild build finished with status: $STATUS"
+              return 1
+            fi
         else
             print_status "$RED" "❌ CodeBuild deployment failed. Stopping."
             return 1
@@ -536,11 +585,13 @@ main() {
     if [ "$started" == "true" ] && ! should_skip_stack "callback"; then
         print_status "$BLUE" "🐳 Step 6: Deploying callback handler stack..."
         
-        # Update Container Image in existing parameter file
+        # Update (overwrite) ContainerImage in callback-handler.json every time
         if [ -f "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" ]; then
-            # Replace placeholder with actual Container Image URI
-            sed -i.bak "s|PLACEHOLDER_CONTAINER_IMAGE|${ECR_REPO_URI}:latest|" "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json"
-            print_status "$GREEN" "✅ Updated Container Image in callback-handler.json"
+            tmp_cb=$(mktemp)
+            jq --arg img "${ECR_REPO_URI}:latest" 'map(if .ParameterKey=="ContainerImage" then .ParameterValue=$img else . end)' \
+              "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" > "$tmp_cb" && \
+              mv "$tmp_cb" "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json"
+            print_status "$GREEN" "✅ Set ContainerImage to ${ECR_REPO_URI}:latest in callback-handler.json"
         else
             print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/callback-handler.json"
             print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"
@@ -610,7 +661,7 @@ main() {
         print_status "$YELLOW" "🔗 Next steps:"
         print_status "$YELLOW" "  1. ✅ Verify ECS service is running"
         print_status "$YELLOW" "  2. 🔍 Check Application Load Balancer health"
-        print_status "$YELLOW" "  3. 👤 Configure Cosigner with pairing token (see README section 5)"
+        print_status "$YELLOW" "  3. 🔗 Configure Cosigner with pairing token (see README section 5)"
         print_status "$YELLOW" "  4. 🔗 Test callback endpoint connectivity"
         print_status "$GREEN" ""
         print_status "$GREEN" "🎉 All certificates have been automatically registered to SSM Parameter Store!"

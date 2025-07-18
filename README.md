@@ -262,9 +262,13 @@ aws acm import-certificate \
   --region ap-northeast-1
 
 # 6. 証明書ARNをパラメータファイルに設定
-# 上記のコマンドで出力されたCertificateArnを
-# infrastructure/parameters/dev/security.json のSSLCertificateArn に設定
-# PLACEHOLDER_SSL_CERTIFICATE_ARN を実際のARNに置換
+# 上記のコマンドで出力された **CertificateArn** を、
+# **`infrastructure/parameters/<ENV>/security.json`** と 
+# **`infrastructure/parameters/<ENV>/callback-handler.json`** の
+# `SSLCertificateArn` を **実際の ARN** に置換してください。
+#   - `<ENV>` は `dev` / `staging` / `prod` など対象環境のディレクトリ名
+#   - `PLACEHOLDER_SSL_CERTIFICATE_ARN` を **実際の ARN** に変更
+#   - `callback-handler.json` については *ContainerImage* パラメータはスクリプトが自動更新しますが、`SSLCertificateArn` は自動更新されません
 ```
 
 #### 自動デプロイメント
@@ -287,7 +291,7 @@ aws acm import-certificate \
 **🚨 重要な変更点**:
 - SSL証明書ARNは**事前に手動設定**が必要です
 - デプロイ前に`./infrastructure/create-parameters.sh`を実行してください
-- パラメータファイルに`PLACEHOLDER_SSL_CERTIFICATE_ARN`が残っているとエラーになります
+- `infrastructure/parameters/<ENV>/security.json` **および** `infrastructure/parameters/<ENV>/callback-handler.json` に `PLACEHOLDER_SSL_CERTIFICATE_ARN` が残っているとデプロイが失敗します
 
 **実行例**:
 ```bash
@@ -590,7 +594,7 @@ sudo yum update -y
 
 ### 📖 参考資料
 
-詳細な設定については、各CloudFormationスタックファイルを参照してください。
+詳細な設定については、各CloudFormationスタックファイルを参照してください。 
 
 - [Fireblocks API Cosigner ドキュメント](https://developers.fireblocks.com/reference/install-api-cosigner-add-new-cosigner-p2)
 - [AWS ECS Fargate ドキュメント](https://docs.aws.amazon.com/ecs/latest/userguide/AWS_Fargate.html)

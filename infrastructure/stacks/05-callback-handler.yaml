@@ -23,56 +23,55 @@ Parameters:
     Description: SSL certificate ARN for ALB (will be created manually)
 
 Resources:
+  # ---------------------------
+  # 以下のECRRepositoryリソースは04-codebuild-automationスタックで既に作成済みのため無効化
+  # ---------------------------
   # ECR Repository for container images
-  ECRRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub ${ProjectName}
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {
-            "rules": [
-              {
-                "rulePriority": 1,
-                "description": "Keep last 10 tagged images",
-                "selection": {
-                  "tagStatus": "tagged",
-                  "tagPrefixList": ["latest", "v"],
-                  "countType": "imageCountMoreThan",
-                  "countNumber": 10
-                },
-                "action": {
-                  "type": "expire"
-                }
-              },
-              {
-                "rulePriority": 2,
-                "description": "Delete untagged images older than 1 day",
-                "selection": {
-                  "tagStatus": "untagged",
-                  "countType": "sinceImagePushed",
-                  "countUnit": "days",
-                  "countNumber": 1
-                },
-                "action": {
-                  "type": "expire"
-                }
-              }
-            ]
-          }
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-ecr-${Environment}
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Stack
-          Value: callback-handler
-        - Key: Project
-          Value: fireblocks-callback-handler
-        - Key: ManagedBy
-          Value: cloudformation
+  # ECRRepository:
+  #   Type: AWS::ECR::Repository
+  #   Properties:
+  #     RepositoryName: !Sub ${ProjectName}
+  #     ImageScanningConfiguration:
+  #       ScanOnPush: true
+  #     LifecyclePolicy:
+  #       LifecyclePolicyText: |
+  #         {
+  #           "rules": [
+  #             {
+  #               "rulePriority": 1,
+  #               "description": "Keep last 10 tagged images",
+  #               "selection": {
+  #                 "tagStatus": "tagged",
+  #                 "tagPrefixList": ["latest", "v"],
+  #                 "countType": "imageCountMoreThan",
+  #                 "countNumber": 10
+  #               },
+  #               "action": { "type": "expire" }
+  #             },
+  #             {
+  #               "rulePriority": 2,
+  #               "description": "Delete untagged images older than 1 day",
+  #               "selection": {
+  #                 "tagStatus": "untagged",
+  #                 "countType": "sinceImagePushed",
+  #                 "countUnit": "days",
+  #                 "countNumber": 1
+  #               },
+  #               "action": { "type": "expire" }
+  #             }
+  #           ]
+  #         }
+  #     Tags:
+  #       - Key: Name
+  #         Value: !Sub ${ProjectName}-ecr-${Environment}
+  #       - Key: Environment
+  #         Value: !Ref Environment
+  #       - Key: Stack
+  #         Value: callback-handler
+  #       - Key: Project
+  #         Value: fireblocks-callback-handler
+  #       - Key: ManagedBy
+  #         Value: cloudformation
 
   # CloudWatch Log Group
   LogGroup:
@@ -321,17 +320,20 @@ Resources:
       TreatMissingData: notBreaching
 
 Outputs:
-  ECRRepositoryName:
-    Description: ECR Repository Name
-    Value: !Ref ECRRepository
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-Name
-
-  ECRRepositoryURI:
-    Description: ECR Repository URI
-    Value: !GetAtt ECRRepository.RepositoryUri
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-URI
+  # ---------------------------
+  # Outputs 無効化: ECRRepositoryName / ECRRepositoryURI
+  # ---------------------------
+  #  ECRRepositoryName:
+  #    Description: ECR Repository Name
+  #    Value: !Ref ECRRepository
+  #    Export:
+  #      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-Name
+  #
+  #  ECRRepositoryURI:
+  #    Description: ECR Repository URI
+  #    Value: !GetAtt ECRRepository.RepositoryUri
+  #    Export:
+  #      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-URI
 
   ECSClusterName:
     Description: ECS Cluster Name

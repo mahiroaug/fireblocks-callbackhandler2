@@ -284,6 +284,20 @@ Resources:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
 
+  # ECR API VPC Endpoint
+  ECRApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
   # Cosigner IAM Role (KMS参照を除去)
   CosignerRole:
     Type: AWS::IAM::Role
