@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CodeBuild Automation - Auto-build Docker image and push to ECR"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: "e2e-monitor-cbh"
+    Description: "Project name for resource naming"
+
+  Environment:
+    Type: String
+    Default: "dev"
+    Description: "Environment name (dev, staging, prod)"
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+  ECRRepositoryURI:
+    Type: String
+    Description: "ECR repository URI for container image"
+
+  GitHubRepoURL:
+    Type: String
+    Default: "https://github.com/your-repo/fireblocks-callback-handler"
+    Description: "GitHub repository URL (optional for manual build)"
+
+Resources:
+  # ECR Repository
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Ref ProjectName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+  # CodeBuild Service Role
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-codebuild-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource: "*"
+
+  # CodeBuild Project
+  DockerImageBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-docker-build-${Environment}"
+      Description: "Build Docker image and push to ECR"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ProjectName
+          - Name: IMAGE_TAG
+            Value: latest
+          - Name: ECR_REPOSITORY_URI
+            Value: !Ref ECRRepositoryURI
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+                - echo Build started on `date`
+                - echo Building the Docker image...
+            build:
+              commands:
+                - |
+                  # Create temporary directory with application code
+                  mkdir -p /tmp/app
+                  cd /tmp/app
+                  
+                  # Create a simple Express.js application
+                  cat > package.json << 'EOF'
+                  {
+                    "name": "fireblocks-callback-handler",
+                    "version": "1.0.0",
+                    "description": "Fireblocks Callback Handler",
+                    "main": "src/index.js",
+                    "scripts": {
+                      "start": "node src/index.js",
+                      "dev": "nodemon src/index.js"
+                    },
+                    "dependencies": {
+                      "express": "^4.18.2",
+                      "jsonwebtoken": "^9.0.0",
+                      "winston": "^3.8.2",
+                      "aws-sdk": "^2.1234.0"
+                    },
+                    "devDependencies": {
+                      "nodemon": "^2.0.20"
+                    }
+                  }
+                  EOF
+                  
+                  # Create source directory and main application file
+                  mkdir -p src
+                  cat > src/index.js << 'EOF'
+                  const express = require('express');
+                  const jwt = require('jsonwebtoken');
+                  const winston = require('winston');
+                  const AWS = require('aws-sdk');
+                  
+                  const app = express();
+                  const port = process.env.PORT || 3000;
+                  
+                  // Configure logger
+                  const logger = winston.createLogger({
+                    level: 'info',
+                    format: winston.format.json(),
+                    transports: [
+                      new winston.transports.Console()
+                    ]
+                  });
+                  
+                  // Configure AWS SDK
+                  AWS.config.update({ region: process.env.AWS_REGION || 'ap-northeast-1' });
+                  const ssm = new AWS.SSM();
+                  
+                  app.use(express.json());
+                  
+                  // Health check endpoint
+                  app.get('/health', (req, res) => {
+                    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+                  });
+                  
+                  // Callback endpoint
+                  app.post('/callback', async (req, res) => {
+                    try {
+                      logger.info('Received callback request', { body: req.body });
+                      
+                      // For now, just return success
+                      res.json({ 
+                        status: 'success',
+                        message: 'Callback received',
+                        timestamp: new Date().toISOString()
+                      });
+                    } catch (error) {
+                      logger.error('Error processing callback', { error: error.message });
+                      res.status(500).json({ error: 'Internal server error' });
+                    }
+                  });
+                  
+                  app.listen(port, () => {
+                    logger.info(`Callback Handler running on port ${port}`);
+                  });
+                  EOF
+                  
+                  # Create Dockerfile
+                  cat > Dockerfile << 'EOF'
+                  FROM node:18-alpine
+                  
+                  WORKDIR /app
+                  
+                  # Copy package files
+                  COPY package*.json ./
+                  
+                  # Install dependencies
+                  RUN npm install --production
+                  
+                  # Copy source code
+                  COPY src/ ./src/
+                  
+                  # Expose port
+                  EXPOSE 3000
+                  
+                  # Health check
+                  HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+                    CMD node -e "const http = require('http'); const options = { host: 'localhost', port: 3000, path: '/health', timeout: 2000 }; const req = http.request(options, (res) => { console.log(\`STATUS: \${res.statusCode}\`); process.exit(res.statusCode === 200 ? 0 : 1); }); req.on('error', (err) => { console.log('ERROR', err); process.exit(1); }); req.end();"
+                  
+                  # Start application
+                  CMD ["npm", "start"]
+                  EOF
+                  
+                  # Build Docker image
+                  docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+                  docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:$IMAGE_TAG
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker image...
+                - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+      TimeoutInMinutes: 30
+
+  # Note: CodeBuild project is created but not automatically executed.
+  # To build and push the Docker image, manually run:
+  # aws codebuild start-build --project-name <project-name> --profile <profile> --region <region>
+
+Outputs:
+  ECRRepositoryURI:
+    Description: "URI of the ECR repository"
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}"
+    Export:
+      Name: !Sub "${ProjectName}-ecr-repository-uri-${Environment}"
+
+  ECRRepositoryArn:
+    Description: "ARN of the ECR repository"
+    Value: !GetAtt ECRRepository.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ecr-repository-arn-${Environment}"
+
+  CodeBuildProjectName:
+    Description: "Name of the CodeBuild project"
+    Value: !Ref DockerImageBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-codebuild-project-${Environment}"
+
+  CodeBuildProjectArn:
+    Description: "ARN of the CodeBuild project"
+    Value: !GetAtt DockerImageBuildProject.Arn
+    Export:
+      Name: !Sub "${ProjectName}-codebuild-project-arn-${Environment}"

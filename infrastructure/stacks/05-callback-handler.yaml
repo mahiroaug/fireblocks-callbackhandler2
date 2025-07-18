@@ -23,6 +23,57 @@ Parameters:
     Description: SSL certificate ARN for ALB (will be created manually)
 
 Resources:
+  # ECR Repository for container images
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${ProjectName}
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 tagged images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["latest", "v"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Delete untagged images older than 1 day",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ecr-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: callback-handler
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
   # CloudWatch Log Group
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -81,6 +132,14 @@ Resources:
               Value: !Ref Environment
             - Name: LOG_LEVEL
               Value: info
+            - Name: USE_SSM_PARAMETERS
+              Value: true
+            - Name: CALLBACK_PRIVATE_KEY_PARAMETER
+              Value: !Sub "${ProjectName}/${Environment}/jwt/callback-private-key"
+            - Name: COSIGNER_PUBLIC_KEY_PARAMETER
+              Value: !Sub "${ProjectName}/${Environment}/jwt/cosigner-public-key"
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -262,6 +321,18 @@ Resources:
       TreatMissingData: notBreaching
 
 Outputs:
+  ECRRepositoryName:
+    Description: ECR Repository Name
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-Name
+
+  ECRRepositoryURI:
+    Description: ECR Repository URI
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-URI
+
   ECSClusterName:
     Description: ECS Cluster Name
     Value: !Ref ECSCluster

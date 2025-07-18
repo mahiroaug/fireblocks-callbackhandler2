@@ -1,10 +1,10 @@
 # このファイルは certs/ ディレクトリをGitで管理するために存在します
 
-# 証明書ファイル:
-# - cosigner_public.pem
-# - callback_private.pem 
-# - callback_public.pem 
+# JWT用証明書ファイル（openssl コマンドで作成）:
+# - callback_private.pem  (openssl genrsa で作成)
+# - callback_public.pem   (openssl rsa で作成)
+# - cosigner_public.pem   (Fireblocks Cosignerから取得)
 
-# SSL証明書ファイル:
-# - callback-handler-ssl.crt
-# - callback-handler-ssl.key 
+# SSL証明書ファイル（openssl コマンドで作成）:
+# - callback-handler-ssl.crt  (openssl req で作成)
+# - callback-handler-ssl.key  (openssl req で作成) 

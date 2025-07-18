@@ -149,13 +149,14 @@ sequenceDiagram
 ## 🏗️ 設計要点
 
 ### マルチスタックアーキテクチャ
-このプロジェクトは、**5つの独立したCloudFormationスタック**で構成されています：
+このプロジェクトは、**6つの独立したCloudFormationスタック**で構成されています：
 
 1. **Foundation Stack** (`01-foundation.yaml`) - VPC、サブネット、ルーティング
-2. **Security Stack** (`02-security.yaml`) - IAM、セキュリティグループ、KMS
+2. **Security Stack** (`02-security.yaml`) - IAM、セキュリティグループ、KMS、SSL証明書インポート
 3. **DNS Stack** (`03-dns.yaml`) - Private Hosted Zone
-4. **Callback Handler Stack** (`04-callback-handler.yaml`) - ALB、ECS、VPC Endpoints
-5. **Cosigner Stack** (`05-cosigner.yaml`) - EC2、S3、Nitro Enclave
+4. **CodeBuild + ECR Automation** (`04-codebuild-automation.yaml`) - ECRリポジトリ + Dockerイメージ自動ビルド
+5. **Callback Handler Stack** (`05-callback-handler.yaml`) - ALB、ECS、VPC Endpoints
+6. **Cosigner Stack** (`06-cosigner.yaml`) - EC2、S3、Nitro Enclave
 
 ### ネットワーク設計
 - **VPC**: 10.0.0.0/16 (完全プライベート)
@@ -199,114 +200,301 @@ fireblocks-callback-handler/
 │   ├── src/                         # ソースコード
 │   └── Dockerfile                   # ECS Fargate用
 ├── infrastructure/                  # インフラストラクチャ
-│   ├── deploy-stacks.sh            # 統合デプロイスクリプト
+│   ├── deploy-automated.sh         # 🚀 完全自動化デプロイスクリプト
 │   ├── stacks/                     # CloudFormationスタック
 │   │   ├── 01-foundation.yaml      # ネットワーク基盤
-│   │   ├── 02-security.yaml        # セキュリティ設定
+│   │   ├── 02-security.yaml        # セキュリティ設定 + SSL証明書インポート
 │   │   ├── 03-dns.yaml             # DNS設定
-│   │   ├── 04-callback-handler.yaml # アプリケーション
-│   │   └── 05-cosigner.yaml        # Cosigner設定
+│   │   ├── 04-codebuild-automation.yaml # CodeBuild + ECR自動ビルド
+│   │   ├── 05-callback-handler.yaml # アプリケーション
+│   │   └── 06-cosigner.yaml        # Cosigner設定
 │   └── parameters/                 # パラメータファイル
-│       ├── common.json             # 共通設定
-│       ├── dev/                    # 開発環境
-│       └── production-jp/          # 本番環境
+│       ├── common.json             # 📝 共通設定（自動生成の基盤）
+│       ├── dev/                    # 開発環境（common.jsonから自動生成）
+│       └── production-jp/          # 本番環境（common.jsonから自動生成）
 └── .devcontainer/                   # DevContainer設定
 ```
 
 ## 🚀 クイックスタート
 
-### 1. 開発環境のセットアップ
+### 方法1: 自動デプロイメント（推奨）
+
+#### 事前準備（必須）
 
 ```bash
 # DevContainerで開発環境を起動
 code .
 # Command Palette → "Dev Containers: Reopen in Container"
-```
 
-### 2. 証明書の準備
+# 1. パラメータファイルを作成
+./infrastructure/create-parameters.sh
 
-```bash
-# 証明書ファイルを配置
-cp cosigner_public.pem certs/
-cp callback_private.pem certs/
-```
+# 2. 証明書ディレクトリを作成
+mkdir -p certs && cd certs
 
-### 3. SSL証明書の作成
+# 3. JWT証明書を事前生成
+# Callback Handler用の秘密鍵・公開鍵を生成
+openssl genrsa -out callback_private.pem 2048
+openssl rsa -in callback_private.pem -outform PEM -pubout -out callback_public.pem
 
-```bash
-# certsディレクトリでSSL証明書を作成
-cd certs
+# Cosigner公開鍵を配置（Fireblocks Cosignerから取得）
+# Fireblocks Console または Cosignerから cosigner_public.pem を取得して配置
+# cp /path/to/cosigner_public.pem ./
 
-# プライベートドメイン用の自己署名証明書を作成（10年間有効）
-openssl req -x509 -newkey rsa:2048 -keyout callback-handler-ssl.key -out callback-handler-ssl.crt -days 3650 -nodes -subj "/C=US/ST=CA/L=San Francisco/O=Fireblocks/CN=callback-handler.internal"
+# 4. SSL証明書を生成（HTTPS通信用）
+# シンプルな自己署名証明書を生成（ACM互換形式）
+openssl req -new -x509 -keyout callback-handler-ssl.key -out callback-handler-ssl.crt \
+  -days 3650 -nodes -subj "/CN=callback-handler.internal"
 
-# ACMに証明書をインポート
-aws acm import-certificate \
-    --certificate fileb://callback-handler-ssl.crt \
-    --private-key fileb://callback-handler-ssl.key \
-    --region ap-northeast-1 \
-    --profile ****
+# 生成された証明書を確認
+ls -la callback-handler-ssl.*
+openssl x509 -in callback-handler-ssl.crt -text -noout | head -10
 
-# 証明書ARNを取得（後で使用）
-aws acm list-certificates --region ap-northeast-1 --profile ****
-
-# プロジェクトルートに戻る
 cd ..
+
+# 5. SSL証明書をAWS Certificate Managerに手動インポート
+# AWS Console → Certificate Manager → Import certificate
+# または AWS CLI を使用:
+aws acm import-certificate \
+  --certificate fileb://certs/callback-handler-ssl.crt \
+  --private-key fileb://certs/callback-handler-ssl.key \
+  --profile <aws_profile> \
+  --region ap-northeast-1
+
+# 6. 証明書ARNをパラメータファイルに設定
+# 上記のコマンドで出力されたCertificateArnを
+# infrastructure/parameters/dev/security.json のSSLCertificateArn に設定
+# PLACEHOLDER_SSL_CERTIFICATE_ARN を実際のARNに置換
 ```
 
-### 4. 設定ファイルの準備
+#### 自動デプロイメント
 
 ```bash
-# パラメータファイルを作成
-./infrastructure/deploy-stacks.sh create-params
-
-# 作成されたパラメータファイルを編集
-# infrastructure/parameters/dev/callback-handler.json
-# - ContainerImage: 実際のECRイメージURIに置換（必要に応じて）
-
-# infrastructure/parameters/dev/cosigner.json
-# - 基本的なパラメータ（ProjectName, Environment, InstanceType）のみ
-# - CosignerのペアリングトークンやインストールはEC2起動後に手動設定
+# JWT証明書の自動SSM登録とインフラデプロイ
+./infrastructure/deploy-automated.sh -p <aws_profile>
 ```
 
-### 5. マルチスタックデプロイメント
+**含まれる自動化**:
+- 📝 **事前のパラメータファイル作成**（`./infrastructure/create-parameters.sh`）
+- 🔑 JWT証明書の自動SSM Parameter Store登録
+- 🏗️ CloudFormationスタックの依存関係順デプロイ
+- 📦 ECRリポジトリの作成
+- 🔨 CodeBuildによるDockerイメージの自動ビルド・プッシュ
+- 🐳 ECS Fargateでの自動デプロイ
+- 🌐 Private Hosted Zone設定
+- 👤 Cosignerインフラの準備
 
+**🚨 重要な変更点**:
+- SSL証明書ARNは**事前に手動設定**が必要です
+- デプロイ前に`./infrastructure/create-parameters.sh`を実行してください
+- パラメータファイルに`PLACEHOLDER_SSL_CERTIFICATE_ARN`が残っているとエラーになります
+
+**実行例**:
+```bash
+# ⚠️ 事前準備が必要（上記の事前準備手順を完了してください）
+
+# 1. パラメータファイルを作成
+./infrastructure/create-parameters.sh
+
+# 2. SSL証明書を生成・インポート・設定（上記手順参照）
+
+# 3. 基本的な実行
+./infrastructure/deploy-automated.sh -p <aws_profile>
+
+# 本番環境での実行
+./infrastructure/deploy-automated.sh -p prod_profile -e prod
+
+# 途中で失敗した場合の再実行（DNSスタックから）
+./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack dns
+
+# 特定のスタックをスキップ（例：Cosigner）
+./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner
+
+# ドライランで実行内容を事前確認
+./infrastructure/deploy-automated.sh -p <aws_profile> --dry-run
+
+# 現在のスタック状態を確認
+./infrastructure/deploy-automated.sh -p <aws_profile> --status
+```
+
+### 🛠️ 高度なデプロイメント機能
+
+#### 1. スタック状態の確認
 ```bash
 # 現在のスタック状態を確認
-./infrastructure/deploy-stacks.sh status
+./infrastructure/deploy-automated.sh -p <aws_profile> --status
 
-# AWS認証情報の設定確認
-aws configure list --profile ****
-
-# 全スタックのデプロイ（開発環境）
-./infrastructure/deploy-stacks.sh deploy-all
-
-# 本番環境でのデプロイ（環境指定）
-./infrastructure/deploy-stacks.sh deploy-all -e production-jp
-
-# 個別スタックのデプロイ（依存関係順）
-./infrastructure/deploy-stacks.sh deploy-foundation
-./infrastructure/deploy-stacks.sh deploy-security
-./infrastructure/deploy-stacks.sh deploy-dns
-./infrastructure/deploy-stacks.sh deploy-callback
-./infrastructure/deploy-stacks.sh deploy-cosigner
-
-# パラメータファイルの作成（初回のみ）
-./infrastructure/deploy-stacks.sh create-params
-
-# ヘルプの表示
-./infrastructure/deploy-stacks.sh help
+# 出力例：
+# 📊 Stack Status Summary (Environment: dev)
+# =================================================
+#   ✅ 1️⃣ Foundation (VPC, Subnets): CREATE_COMPLETE
+#       Stack: e2e-monitor-cbh-01-foundation-dev
+#   ❌ 2️⃣ Security (IAM, Security Groups): CREATE_FAILED
+#       Stack: e2e-monitor-cbh-02-security-dev
+#   ⚪ 3️⃣ DNS (Private Hosted Zone): Not deployed
+#       Stack: e2e-monitor-cbh-03-dns-dev
+#   ⚪ 4️⃣ CodeBuild + ECR: Not deployed
+#       Stack: e2e-monitor-cbh-04-codebuild-dev
+#   ⚪ 5️⃣ Callback Handler (ALB, ECS): Not deployed
+#       Stack: e2e-monitor-cbh-05-callback-handler-dev
+#   ⚪ 6️⃣ Cosigner (EC2, Nitro Enclave): Not deployed
+#       Stack: e2e-monitor-cbh-06-cosigner-dev
 ```
 
-**重要**: 
-- 初回デプロイ前に SSL証明書をACMに作成・インポート
-- `create-params` でパラメータファイルを作成
-- 依存関係があるため、個別デプロイ時は順序を守る
-- Cosignerの設定（ペアリングトークン、インストール）はEC2起動後に手動で実施
+#### 2. 途中からの再実行（失敗時のリベンジ）
+```bash
+# 特定のスタックから再開
+./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack dns
 
-詳細なデプロイメント手順については、**[STACK_DEPLOYMENT_GUIDE.md](STACK_DEPLOYMENT_GUIDE.md)**を参照してください。
+# 利用可能なスタック名:
+# - foundation: VPC、サブネット
+#   → e2e-monitor-cbh-01-foundation-dev
+# - security: IAM、セキュリティグループ
+#   → e2e-monitor-cbh-02-security-dev
+# - dns: Private Hosted Zone
+#   → e2e-monitor-cbh-03-dns-dev
+# - codebuild: CodeBuild + ECR
+#   → e2e-monitor-cbh-04-codebuild-dev
+# - callback: Callback Handler
+#   → e2e-monitor-cbh-05-callback-handler-dev
+# - cosigner: Cosigner EC2
+#   → e2e-monitor-cbh-06-cosigner-dev
+#
+# ⚠️ 注意: JWT証明書（certs/callback_private.pem, certs/cosigner_public.pem）
+#          は事前に生成しておく必要があります
+```
 
-### 6. Cosignerの手動設定
+#### 3. 特定スタックのスキップ
+```bash
+# 単一スタックをスキップ
+./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner
+
+# 複数スタックをスキップ（カンマ区切り）
+./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner,codebuild
+```
+
+#### 4. ドライランモード
+```bash
+# 実際にデプロイせずに実行内容を確認
+./infrastructure/deploy-automated.sh -p <aws_profile> --dry-run
+
+# 出力例：
+# 🔍 DRY RUN MODE - No actual deployment will occur
+# 🔍 [DRY RUN] Would create: Foundation Stack
+#     Template: infrastructure/stacks/01-foundation.yaml
+#     Parameters: infrastructure/parameters/dev/foundation.json
+```
+
+#### 5. 環境別・地域別デプロイメント
+```bash
+# 開発環境（デフォルト）
+./infrastructure/deploy-automated.sh -p dev_profile
+
+# ステージング環境
+./infrastructure/deploy-automated.sh -p staging_profile -e staging
+
+# 本番環境
+./infrastructure/deploy-automated.sh -p prod_profile -e prod
+
+# 異なるリージョンにデプロイ
+./infrastructure/deploy-automated.sh -p my_profile -r us-east-1
+```
+
+#### 6. 設定のカスタマイズ
+`infrastructure/parameters/common.json`を編集して、プロジェクト固有の設定を変更できます：
+
+```json
+{
+  "ProjectName": "my-fireblocks-cbh",
+  "Region": "ap-northeast-1",
+  "Environment": "dev",
+  "NetworkConfig": {
+    "VpcCidr": "10.0.0.0/16",
+    "PublicSubnetCidr": "10.0.0.0/20",
+    "PrivateSubnetCidr": "10.0.128.0/20"
+  },
+  "DomainConfig": {
+    "InternalDomain": "callback-handler.internal"
+  }
+}
+```
+
+**設定項目の説明**:
+- **ProjectName**: プロジェクト名（リソース名の接頭辞）
+- **Region**: AWSリージョン
+- **Environment**: 環境名（dev/staging/prod）
+- **NetworkConfig**: ネットワーク設定
+  - **VpcCidr**: VPCのCIDRブロック
+  - **PublicSubnetCidr**: パブリックサブネットのCIDRブロック
+  - **PrivateSubnetCidr**: プライベートサブネットのCIDRブロック
+- **DomainConfig**: ドメイン設定
+  - **InternalDomain**: 内部ドメイン名
+
+**🔄 設定変更時の注意**:
+- `common.json`を変更後、デプロイメントを実行すると全パラメータファイルが自動的に再生成されます
+- **SSL証明書ARNは手動設定値が保持されます**（上書きされません）
+- ネットワーク設定を変更する場合は、既存のリソースとの整合性を確認してください
+
+### 🔧 トラブルシューティング
+
+#### よくある失敗パターンと対処法
+
+1. **JWT証明書が見つからない（デプロイ前エラー）**
+   ```bash
+   # JWT証明書を生成してから再実行
+   mkdir -p certs && cd certs
+   openssl genrsa -out callback_private.pem 2048
+   openssl rsa -in callback_private.pem -outform PEM -pubout -out callback_public.pem
+   # cosigner_public.pem を Fireblocks から取得して配置
+   cd .. && ./infrastructure/deploy-automated.sh -p <aws_profile>
+   ```
+
+2. **CodeBuildでのイメージビルド失敗**
+   ```bash
+   # CodeBuildスタックから再実行
+   ./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack codebuild
+   ```
+
+4. **Callback Handlerでのコンテナ起動失敗**
+   ```bash
+   # Callback Handlerスタックから再実行
+   ./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack callback
+   ```
+
+5. **Cosignerが不要な場合**
+   ```bash
+   # Cosignerをスキップしてデプロイ
+   ./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner
+   ```
+
+#### エラー時の状態確認
+```bash
+# 詳細な状態確認
+./infrastructure/deploy-automated.sh -p <aws_profile> --status
+
+# JWT証明書ファイルの確認
+ls -la certs/
+# 以下のファイルが必要:
+# - callback_private.pem  (自動生成)
+# - callback_public.pem   (自動生成)
+# - cosigner_public.pem   (Fireblocks から取得)
+
+# SSM Parameter Store の確認
+aws ssm get-parameters \
+    --names "/e2e-monitor-cbh/dev/jwt/callback-private-key" \
+           "/e2e-monitor-cbh/dev/jwt/cosigner-public-key" \
+    --region ap-northeast-1 \
+    --profile <aws_profile> \
+    --query 'Parameters[].Name'
+
+# AWS コンソールでの確認
+# 1. CloudFormation スタックの詳細
+# 2. CloudWatch Logs でのログ確認
+# 3. ECS サービスの状態確認
+# 4. SSM Parameter Store での証明書確認
+```
+
+### 5. Cosignerの手動設定
 
 インフラストラクチャのデプロイ完了後、Cosignerの設定を手動で実施：
 
@@ -384,4 +572,26 @@ sudo yum update -y
 
 ---
 
-詳細な設定については、各CloudFormationスタックファイルを参照してください。 
+## ✅ デプロイ後の確認事項
+
+### 📊 システム動作確認
+
+**完全自動化デプロイメント後、以下の確認を行ってください**：
+
+1. **ECS サービス動作確認** - Fargate タスクが正常に起動しているか
+2. **JWT証明書読み込み確認** - CloudWatch Logs でSSM Parameter Store からの証明書読み込み
+3. **ALB Health Check** - Application Load Balancer のヘルスチェック状態
+4. **DNS 解決確認** - Private Hosted Zone での名前解決
+
+### 🔑 証明書管理
+
+- **SSL証明書**: 🔧 **手動インポート** (事前生成 → 手動ACMインポート → パラメータファイル設定)
+- **JWT証明書**: ✅ **SSM 自動登録** (事前生成 → 自動SSM登録)
+
+### 📖 参考資料
+
+詳細な設定については、各CloudFormationスタックファイルを参照してください。
+
+- [Fireblocks API Cosigner ドキュメント](https://developers.fireblocks.com/reference/install-api-cosigner-add-new-cosigner-p2)
+- [AWS ECS Fargate ドキュメント](https://docs.aws.amazon.com/ecs/latest/userguide/AWS_Fargate.html)
+- [AWS SSM Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) 

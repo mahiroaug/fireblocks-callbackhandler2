@@ -13,6 +13,16 @@ Parameters:
     AllowedValues: [dev, stg, prod]
     Description: Environment name
 
+  DomainName:
+    Type: String
+    Default: callback-handler.internal
+    Description: Domain name for SSL certificate
+
+  SSLCertificateArn:
+    Type: String
+    Description: SSL certificate ARN (imported to ACM)
+    Default: "arn:aws:acm:ap-northeast-1:123456789012:certificate/00000000-1111-2222-3333-444444444444"
+
 Resources:
   # Cosigner用セキュリティグループ
   CosignerSecurityGroup:
@@ -22,18 +32,6 @@ Resources:
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
       SecurityGroupEgress:
-        # ALBへのHTTPS通信
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          DestinationSecurityGroupId: !Ref ALBSecurityGroup
-          Description: "HTTPS to ALB"
-        # VPCエンドポイントへの通信
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
-          Description: "HTTPS to VPC Endpoints"
         # Fireblocks SaaS API通信（NAT Gateway経由）
         - IpProtocol: tcp
           FromPort: 443
@@ -59,18 +57,6 @@ Resources:
       GroupDescription: Security group for Application Load Balancer
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref CosignerSecurityGroup
-          Description: "HTTPS from Cosigner"
-      SecurityGroupEgress:
-        - IpProtocol: tcp
-          FromPort: 3000
-          ToPort: 3000
-          DestinationSecurityGroupId: !Ref ECSSecurityGroup
-          Description: "HTTP to ECS"
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-alb-sg-${Environment}
@@ -90,17 +76,6 @@ Resources:
       GroupDescription: Security group for VPC Endpoints
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref CosignerSecurityGroup
-          Description: "HTTPS from Cosigner"
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref ECSSecurityGroup
-          Description: "HTTPS from ECS"
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-vpc-endpoint-sg-${Environment}
@@ -120,18 +95,6 @@ Resources:
       GroupDescription: Security group for ECS Fargate
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 3000
-          ToPort: 3000
-          SourceSecurityGroupId: !Ref ALBSecurityGroup
-          Description: "HTTP from ALB"
-      SecurityGroupEgress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
-          Description: "HTTPS to VPC Endpoints"
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-ecs-sg-${Environment}
@@ -143,6 +106,95 @@ Resources:
           Value: fireblocks-callback-handler
         - Key: ManagedBy
           Value: cloudformation
+
+  # セキュリティグループルール（循環依存を避けるため分離）
+  # Cosigner -> ALB
+  CosignerToALBRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref CosignerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref ALBSecurityGroup
+      Description: "HTTPS to ALB"
+
+  # Cosigner -> VPC Endpoints
+  CosignerToVPCEndpointsRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref CosignerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
+      Description: "HTTPS to VPC Endpoints"
+
+  # ALB <- Cosigner
+  ALBFromCosignerRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref CosignerSecurityGroup
+      Description: "HTTPS from Cosigner"
+
+  # ALB -> ECS
+  ALBToECSRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3000
+      ToPort: 3000
+      DestinationSecurityGroupId: !Ref ECSSecurityGroup
+      Description: "HTTP to ECS"
+
+  # ECS <- ALB
+  ECSFromALBRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ECSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 3000
+      ToPort: 3000
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Description: "HTTP from ALB"
+
+  # ECS -> VPC Endpoints
+  ECSToVPCEndpointsRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref ECSSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
+      Description: "HTTPS to VPC Endpoints"
+
+  # VPC Endpoints <- Cosigner
+  VPCEndpointsFromCosignerRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref VPCEndpointSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref CosignerSecurityGroup
+      Description: "HTTPS from Cosigner"
+
+  # VPC Endpoints <- ECS
+  VPCEndpointsFromECSRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref VPCEndpointSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref ECSSecurityGroup
+      Description: "HTTPS from ECS"
 
   # S3 Gateway Endpoint
   S3GatewayEndpoint:
@@ -232,7 +284,7 @@ Resources:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
 
-  # Cosigner IAM Role
+  # Cosigner IAM Role (KMS参照を除去)
   CosignerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -257,14 +309,6 @@ Resources:
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*"
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:Encrypt
-                  - kms:ReEncrypt*
-                  - kms:GenerateDataKey*
-                  - kms:DescribeKey
-                Resource: !GetAtt CosignerKMSKey.Arn
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -338,7 +382,7 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # ECS Task Role
+  # ECS Task Role (KMS参照を除去)
   ECSTaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -361,10 +405,6 @@ Resources:
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*"
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -375,7 +415,22 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # KMS Customer Managed Key for Cosigner
+  # KMS Key permissions for ECS Task Role (循環依存解決のため分離)
+  ECSTaskKMSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ECSTaskKMSPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: !GetAtt CosignerKMSKey.Arn
+      Roles:
+        - !Ref ECSTaskRole
+
+  # KMS Customer Managed Key for Cosigner (循環依存解決)
   CosignerKMSKey:
     Type: AWS::KMS::Key
     Properties:
@@ -388,28 +443,6 @@ Resources:
             Principal:
               AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
             Action: "kms:*"
-            Resource: "*"
-          - Sid: Allow use of the key by Cosigner
-            Effect: Allow
-            Principal:
-              AWS: !GetAtt CosignerRole.Arn
-            Action:
-              - "kms:Encrypt"
-              - "kms:Decrypt"
-              - "kms:ReEncrypt*"
-              - "kms:GenerateDataKey*"
-              - "kms:DescribeKey"
-            Resource: "*"
-          - Sid: Allow use of the key by ECS Task
-            Effect: Allow
-            Principal:
-              AWS: !GetAtt ECSTaskRole.Arn
-            Action:
-              - "kms:Encrypt"
-              - "kms:Decrypt"
-              - "kms:ReEncrypt*"
-              - "kms:GenerateDataKey*"
-              - "kms:DescribeKey"
             Resource: "*"
       Tags:
         - Key: Environment
@@ -427,6 +460,25 @@ Resources:
     Properties:
       AliasName: !Sub "alias/${ProjectName}-cosigner-${Environment}"
       TargetKeyId: !Ref CosignerKMSKey
+
+  # KMS Key permissions for Cosigner Role (循環依存解決のため分離)
+  CosignerKMSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: CosignerKMSPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: !GetAtt CosignerKMSKey.Arn
+      Roles:
+        - !Ref CosignerRole
 
 Outputs:
   CosignerSecurityGroupId:
@@ -488,3 +540,9 @@ Outputs:
     Value: !GetAtt CosignerKMSKey.Arn
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerKMSKey-ARN
+
+  SSLCertificateArn:
+    Description: SSL Certificate ARN
+    Value: !Ref SSLCertificateArn
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-SSLCertificate-ARN
