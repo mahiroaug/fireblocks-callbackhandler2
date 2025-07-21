@@ -1,18 +1,17 @@
 {
-  "name": "e2e-monitor-cbh",
-  "version": "1.0.0",
-  "description": "E2E Monitor Callback Handler for ECS Fargate",
+  "name": "fireblocks-callback-handler",
+  "version": "3.0.0",
+  "description": "Fireblocks Callback Handler for AWS Lambda Container",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "node app.js"
+    "dev": "node app.js",
+    "lambda": "node app.js"
   },
   "dependencies": {
     "@aws-sdk/client-ssm": "^3.0.0",
-    "body-parser": "^1.20.2",
-    "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2"
   },
-  "author": "mahiro",
+  "author": "Fireblocks Team",
   "license": "MIT"
 }

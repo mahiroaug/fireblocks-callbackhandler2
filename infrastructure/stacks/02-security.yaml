@@ -40,25 +40,6 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # ALB用セキュリティグループ
-  ALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for Application Load Balancer
-      VpcId:
-        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-alb-sg-${Environment}
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Stack
-          Value: security
-        - Key: Project
-          Value: fireblocks-callback-handler
-        - Key: ManagedBy
-          Value: cloudformation
-
   # VPCエンドポイント用セキュリティグループ
   VPCEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -97,38 +78,8 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # ECS用セキュリティグループ
-  ECSSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for ECS Fargate
-      VpcId:
-        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-ecs-sg-${Environment}
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Stack
-          Value: security
-        - Key: Project
-          Value: fireblocks-callback-handler
-        - Key: ManagedBy
-          Value: cloudformation
-
   # セキュリティグループルール（循環依存を避けるため分離）
-  # Cosigner -> ALB
-  CosignerToALBRule:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref CosignerSecurityGroup
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      DestinationSecurityGroupId: !Ref ALBSecurityGroup
-      Description: "HTTPS to ALB"
-
-  # Cosigner -> VPC Endpoints
+  # Cosigner -> VPC Endpoints (SSM, API Gateway等)
   CosignerToVPCEndpointsRule:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
@@ -139,44 +90,11 @@ Resources:
       DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
       Description: "HTTPS to VPC Endpoints"
 
-  # ALB <- Cosigner
-  ALBFromCosignerRule:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref ALBSecurityGroup
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      SourceSecurityGroupId: !Ref CosignerSecurityGroup
-      Description: "HTTPS from Cosigner"
-
-  # ALB -> ECS
-  ALBToECSRule:
+  # Lambda -> VPC Endpoints
+  LambdaToVPCEndpointsRule:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
-      GroupId: !Ref ALBSecurityGroup
-      IpProtocol: tcp
-      FromPort: 3000
-      ToPort: 3000
-      DestinationSecurityGroupId: !Ref ECSSecurityGroup
-      Description: "HTTP to ECS"
-
-  # ECS <- ALB
-  ECSFromALBRule:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref ECSSecurityGroup
-      IpProtocol: tcp
-      FromPort: 3000
-      ToPort: 3000
-      SourceSecurityGroupId: !Ref ALBSecurityGroup
-      Description: "HTTP from ALB"
-
-  # ECS -> VPC Endpoints
-  ECSToVPCEndpointsRule:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref ECSSecurityGroup
+      GroupId: !Ref LambdaSecurityGroup
       IpProtocol: tcp
       FromPort: 443
       ToPort: 443
@@ -193,28 +111,6 @@ Resources:
       ToPort: 443
       SourceSecurityGroupId: !Ref CosignerSecurityGroup
       Description: "HTTPS from Cosigner"
-
-  # VPC Endpoints <- ECS
-  VPCEndpointsFromECSRule:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref VPCEndpointSecurityGroup
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      SourceSecurityGroupId: !Ref ECSSecurityGroup
-      Description: "HTTPS from ECS"
-
-  # Lambda -> VPC Endpoints
-  LambdaToVPCEndpointsRule:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref LambdaSecurityGroup
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
-      Description: "HTTPS to VPC Endpoints"
 
   # VPC Endpoints <- Lambda
   VPCEndpointsFromLambdaRule:
@@ -287,7 +183,28 @@ Resources:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
 
-  # ECR VPC Endpoint
+  # API Gateway VPC Endpoint (Cosigner -> Lambda 通信用)
+  APIGatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.execute-api"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: "execute-api:Invoke"
+            Resource: "*"
+
+  # ECR VPC Endpoint (Lambda Container Image用)
   ECREndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -329,7 +246,7 @@ Resources:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
 
-  # Cosigner IAM Role (KMS参照を除去)
+  # Cosigner IAM Role
   CosignerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -388,45 +305,44 @@ Resources:
       Roles:
         - !Ref CosignerRole
 
-  # ECS Task Execution Role (Lambda共用)
-  ECSTaskExecutionRole:
+  # Lambda Execution Role (旧名: ECSTaskExecutionRole)
+  LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${ProjectName}-ecs-task-execution-role-${Environment}
+      RoleName: !Sub ${ProjectName}-lambda-execution-role-${Environment}
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
-              Service:
-                - ecs-tasks.amazonaws.com
-                - lambda.amazonaws.com
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
-        - PolicyName: ECSTaskExecutionPolicy
+        - PolicyName: LambdaExecutionPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # SSM Parameter Store Access
               - Effect: Allow
                 Action:
                   - ssm:GetParameter
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*"
+              # KMS Decrypt for SSM Parameters
               - Effect: Allow
                 Action:
                   - kms:Decrypt
                 Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              # CloudWatch Logs (Lambda VPC用)
               - Effect: Allow
                 Action:
-                  - ec2:CreateNetworkInterface
-                  - ec2:DescribeNetworkInterfaces
-                  - ec2:DeleteNetworkInterface
-                  - ec2:AttachNetworkInterface
-                  - ec2:DetachNetworkInterface
-                Resource: "*"
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -437,55 +353,7 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # ECS Task Role (KMS参照を除去)
-  ECSTaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${ProjectName}-ecs-task-role-${Environment}
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ECSTaskPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                  - ssm:GetParametersByPath
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*"
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Stack
-          Value: security
-        - Key: Project
-          Value: fireblocks-callback-handler
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # KMS Key permissions for ECS Task Role (循環依存解決のため分離)
-  ECSTaskKMSPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: ECSTaskKMSPolicy
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - kms:Decrypt
-            Resource: !GetAtt CosignerKMSKey.Arn
-      Roles:
-        - !Ref ECSTaskRole
-
-  # KMS Customer Managed Key for Cosigner (循環依存解決)
+  # KMS Customer Managed Key for Cosigner
   CosignerKMSKey:
     Type: AWS::KMS::Key
     Properties:
@@ -542,18 +410,6 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerSecurityGroup-ID
 
-  ALBSecurityGroupId:
-    Description: ALB Security Group ID
-    Value: !Ref ALBSecurityGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ALBSecurityGroup-ID
-
-  ECSSecurityGroupId:
-    Description: ECS Security Group ID
-    Value: !Ref ECSSecurityGroup
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ECSSecurityGroup-ID
-
   VPCEndpointSecurityGroupId:
     Description: VPC Endpoint Security Group ID
     Value: !Ref VPCEndpointSecurityGroup
@@ -578,17 +434,19 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerInstanceProfile-ARN
 
+  # Lambda Execution Role (旧ECSTaskExecutionRole互換)
+  LambdaExecutionRoleArn:
+    Description: Lambda Execution Role ARN
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-LambdaExecutionRole-ARN
+
+  # Backward compatibility - 既存のスタックが参照している名前を維持
   ECSTaskExecutionRoleArn:
-    Description: ECS Task Execution Role ARN
-    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Description: Lambda Execution Role ARN (backward compatibility)
+    Value: !GetAtt LambdaExecutionRole.Arn
     Export:
       Name: !Sub ${ProjectName}-${Environment}-ECSTaskExecutionRole-ARN
-
-  ECSTaskRoleArn:
-    Description: ECS Task Role ARN
-    Value: !GetAtt ECSTaskRole.Arn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-ECSTaskRole-ARN
 
   CosignerKMSKeyId:
     Description: Cosigner KMS Key ID
@@ -601,3 +459,9 @@ Outputs:
     Value: !GetAtt CosignerKMSKey.Arn
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerKMSKey-ARN
+
+  APIGatewayEndpointId:
+    Description: API Gateway VPC Endpoint ID
+    Value: !Ref APIGatewayEndpoint
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-APIGatewayEndpoint-ID

@@ -85,7 +85,7 @@ cat > "$env_dir/foundation.json" << EOF
         "ParameterValue": "${public_subnet_cidr}"
     },
     {
-        "ParameterKey": "PrivateSubnetACIDR",
+        "ParameterKey": "PrivateSubnetCIDR",
         "ParameterValue": "${private_subnet_cidr}"
     }
 ]
@@ -115,8 +115,8 @@ cat > "$env_dir/security.json" << EOF
 ]
 EOF
 
-# Callback Handler Stack Parameters (template)
-cat > "$env_dir/callback-handler.json" << EOF
+# Lambda Callback Stack Parameters (template)
+cat > "$env_dir/lambda-callback.json" << EOF
 [
     {
         "ParameterKey": "ProjectName",
@@ -173,28 +173,20 @@ print_status "$GREEN" "✅ Parameter files created successfully!"
 print_status "$BLUE" "📁 Files created in: $env_dir"
 print_status "$BLUE" "  - foundation.json"
 print_status "$BLUE" "  - security.json"
-print_status "$BLUE" "  - callback-handler.json"
+print_status "$BLUE" "  - lambda-callback.json"
 print_status "$BLUE" "  - codebuild.json"
 print_status "$BLUE" "  - cosigner.json"
 
 print_status "$YELLOW" ""
 print_status "$YELLOW" "🔒 Next steps:"
-print_status "$YELLOW" "1. Generate SSL certificates:"
+print_status "$YELLOW" "1. Generate JWT certificates:"
 print_status "$YELLOW" "   mkdir -p certs && cd certs"
-print_status "$YELLOW" "   openssl req -new -x509 -keyout callback-handler-ssl.key -out callback-handler-ssl.crt \\"
-print_status "$YELLOW" "     -days 3650 -nodes -subj \"/CN=${domain_name}\""
+print_status "$YELLOW" "   openssl genrsa -out callback_private.pem 2048"
+print_status "$YELLOW" "   openssl rsa -in callback_private.pem -outform PEM -pubout -out callback_public.pem"
 print_status "$YELLOW" ""
-print_status "$YELLOW" "2. Import SSL certificate to AWS Certificate Manager:"
-print_status "$YELLOW" "   aws acm import-certificate \\"
-print_status "$YELLOW" "     --certificate fileb://certs/callback-handler-ssl.crt \\"
-print_status "$YELLOW" "     --private-key fileb://certs/callback-handler-ssl.key \\"
-print_status "$YELLOW" "     --profile <aws_profile> \\"
-print_status "$YELLOW" "     --region ${region}"
+print_status "$YELLOW" "2. Place Cosigner public key:"
+print_status "$YELLOW" "   # Get cosigner_public.pem from Fireblocks Console or Cosigner"
+print_status "$YELLOW" "   # Place it in certs/cosigner_public.pem"
 print_status "$YELLOW" ""
-print_status "$YELLOW" "3. Update SSL Certificate ARN in security.json:"
-print_status "$YELLOW" "   Edit: $env_dir/security.json"
-print_status "$YELLOW" "   Replace: PLACEHOLDER_SSL_CERTIFICATE_ARN"
-print_status "$YELLOW" "   With: arn:aws:acm:${region}:ACCOUNT_ID:certificate/CERTIFICATE_ID"
-print_status "$YELLOW" ""
-print_status "$YELLOW" "4. Run deployment:"
+print_status "$YELLOW" "3. Run deployment (JWT certificates will be auto-registered):"
 print_status "$YELLOW" "   ./infrastructure/deploy-automated.sh -p <aws_profile>" 

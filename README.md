@@ -30,7 +30,7 @@ flowchart TB
                 NAT["🛡️ NAT Gateway<br/>(Fireblocks SaaS通信)"]
             end
 
-            subgraph PrivateSubnetA["🔒 Private Subnet A<br/>(10.0.128.0/20)"]
+            subgraph PrivateSubnet["🔒 Private Subnet<br/>(10.0.128.0/20)"]
                 Cosigner["👤 Cosigner<br/>(Nitro Enclave)<br/>c5.xlarge"]
                 Lambda["λ Lambda<br/>Callback Handler<br/>(Container)"]
             end

@@ -92,8 +92,8 @@ while [[ $# -gt 0 ]]; do
             echo "  -e, --environment Environment (dev, staging, prod)"
             echo "  -r, --region      AWS region"
             echo "  -p, --profile     AWS profile"
-              echo "  --from-stack      Start deployment from specific stack (foundation, security, dns, codebuild, callback, cosigner)"
-  echo "  --skip-stacks     Skip specific stacks (comma-separated: foundation,security,dns,codebuild,callback,cosigner)"
+              echo "  --from-stack      Start deployment from specific stack (foundation, security, codebuild, lambda, cosigner)"
+  echo "  --skip-stacks     Skip specific stacks (comma-separated: foundation,security,codebuild,lambda,cosigner)"
             echo "  --only-stacks     Run only specified stacks (comma-separated), overrides --from/--skip"
             echo "  --dry-run         Show what would be deployed without actually deploying"
             echo "  --status          Show current status of all stacks"
@@ -103,7 +103,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 -p dev_profile                    # Full deployment"
             echo "  $0 -p dev_profile --status           # Check stack status"
             echo "  $0 -p dev_profile --dry-run          # Preview deployment"
-            echo "  $0 -p dev_profile --from-stack dns   # Start from DNS stack"
+            echo "  $0 -p dev_profile --from-stack lambda # Start from Lambda stack"
             echo "  $0 -p dev_profile --skip-stacks cosigner  # Skip cosigner stack"
             exit 0
             ;;
@@ -122,7 +122,7 @@ print_status "$BLUE" "Profile: $PROFILE, Region: $REGION, Environment: $ENVIRONM
 FOUNDATION_STACK="${PROJECT_NAME}-01-foundation-${ENVIRONMENT}"
 SECURITY_STACK="${PROJECT_NAME}-02-security-${ENVIRONMENT}"
 CODEBUILD_STACK="${PROJECT_NAME}-03-codebuild-${ENVIRONMENT}"
-CALLBACK_HANDLER_STACK="${PROJECT_NAME}-04-callback-handler-${ENVIRONMENT}"
+LAMBDA_CALLBACK_STACK="${PROJECT_NAME}-04-lambda-callback-${ENVIRONMENT}"
 COSIGNER_STACK="${PROJECT_NAME}-05-cosigner-${ENVIRONMENT}"
 
 # Get AWS Account ID
@@ -197,7 +197,7 @@ show_all_stacks_status() {
     show_stack_status "$FOUNDATION_STACK" "1️⃣ Foundation (VPC, Subnets)"
     show_stack_status "$SECURITY_STACK" "2️⃣ Security (IAM, Security Groups)"
     show_stack_status "$CODEBUILD_STACK" "3️⃣ CodeBuild + ECR"
-    show_stack_status "$CALLBACK_HANDLER_STACK" "4️⃣ Callback Handler (Lambda, API Gateway)"
+    show_stack_status "$LAMBDA_CALLBACK_STACK" "4️⃣ Lambda Callback (API Gateway + Lambda)"
     show_stack_status "$COSIGNER_STACK" "5️⃣ Cosigner (EC2, Nitro Enclave)"
     
     print_status "$BLUE" "================================================="
@@ -500,7 +500,7 @@ main() {
             # -------------------------------------------
             print_status "$BLUE" "🏃‍♂️  Starting initial CodeBuild build (Docker image push)..."
             BUILD_ID=$(aws codebuild start-build \
-                --project-name "${PROJECT_NAME}-docker-build-${ENVIRONMENT}" \
+                --project-name "${PROJECT_NAME}-build-${ENVIRONMENT}" \
                 --region "$REGION" \
                 --profile "$PROFILE" \
                 --query 'build.id' --output text --no-paginate) || {
@@ -538,35 +538,35 @@ main() {
         print_status "$YELLOW" "⏭️ Skipping CodeBuild stack (explicitly skipped)"
     fi
     
-    # Step 6: Deploy Callback Handler Stack
-    if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "callback" ]; then
+    # Step 6: Deploy Lambda Callback Stack
+    if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "lambda" ]; then
         started=true
     fi
     
-    if [ "$started" == "true" ] && ! should_skip_stack "callback"; then
-        print_status "$BLUE" "🐳 Step 4: Deploying callback handler stack..."
+    if [ "$started" == "true" ] && ! should_skip_stack "lambda"; then
+        print_status "$BLUE" "🐳 Step 4: Deploying Lambda callback stack..."
         
-        # Update (overwrite) ContainerImage in callback-handler.json every time
-        if [ -f "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" ]; then
+        # Update (overwrite) ContainerImage in lambda-callback.json every time
+        if [ -f "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" ]; then
             tmp_cb=$(mktemp)
             jq --arg img "${ECR_REPO_URI}:latest" 'map(if .ParameterKey=="ContainerImage" then .ParameterValue=$img else . end)' \
-              "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" > "$tmp_cb" && \
-              mv "$tmp_cb" "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json"
-            print_status "$GREEN" "✅ Set ContainerImage to ${ECR_REPO_URI}:latest in callback-handler.json"
+              "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" > "$tmp_cb" && \
+              mv "$tmp_cb" "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
+            print_status "$GREEN" "✅ Set ContainerImage to ${ECR_REPO_URI}:latest in lambda-callback.json"
         else
-            print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/callback-handler.json"
+            print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
             print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"
             return 1
         fi
         
-        if ! deploy_stack "$CALLBACK_HANDLER_STACK" "infrastructure/stacks/04-lambda-callback.yaml" "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" "Callback Handler (Lambda, API Gateway)"; then
-            print_status "$RED" "❌ Callback Handler deployment failed. Stopping."
+        if ! deploy_stack "$LAMBDA_CALLBACK_STACK" "infrastructure/stacks/04-lambda-callback.yaml" "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" "Lambda Callback (API Gateway + Lambda)"; then
+            print_status "$RED" "❌ Lambda Callback deployment failed. Stopping."
             return 1
         fi
     elif [ "$started" == "false" ]; then
-        print_status "$YELLOW" "⏭️ Skipping Callback Handler stack (before start point)"
+        print_status "$YELLOW" "⏭️ Skipping Lambda Callback stack (before start point)"
     else
-        print_status "$YELLOW" "⏭️ Skipping Callback Handler stack (explicitly skipped)"
+        print_status "$YELLOW" "⏭️ Skipping Lambda Callback stack (explicitly skipped)"
     fi
     
     # Step 7: Deploy Cosigner Stack (optional)
@@ -600,7 +600,7 @@ main() {
         print_status "$BLUE" "📊 Would deploy the following stacks:"
     else
         print_status "$GREEN" "🎉 Deployment completed successfully!"
-        print_status "$BLUE" "📊 Deployment Summary (6 stacks):"
+        print_status "$BLUE" "📊 Deployment Summary (5 stacks):"
     fi
     
 
@@ -615,10 +615,10 @@ main() {
     
     if [ "$DRY_RUN" != "true" ]; then
         print_status "$YELLOW" "🔗 Next steps:"
-        print_status "$YELLOW" "  1. ✅ Verify ECS service is running"
-        print_status "$YELLOW" "  2. 🔍 Check Application Load Balancer health"
+        print_status "$YELLOW" "  1. ✅ Verify Lambda function is running"
+        print_status "$YELLOW" "  2. 🔍 Check API Gateway Private REST API connectivity"
         print_status "$YELLOW" "  3. 🔗 Configure Cosigner with pairing token (see README section 5)"
-        print_status "$YELLOW" "  4. 🔗 Test callback endpoint connectivity"
+        print_status "$YELLOW" "  4. 🔗 Test Lambda callback endpoint"
         print_status "$GREEN" ""
         print_status "$GREEN" "🎉 All certificates have been automatically registered to SSM Parameter Store!"
     fi

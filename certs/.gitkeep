@@ -2,9 +2,9 @@
 
 # JWT用証明書ファイル（openssl コマンドで作成）:
 # - callback_private.pem  (openssl genrsa で作成)
-# - callback_public.pem   (openssl rsa で作成)
+# - callback_public.pem   (openssl rsa で作成)  
 # - cosigner_public.pem   (Fireblocks Cosignerから取得)
 
-# SSL証明書ファイル（openssl コマンドで作成）:
-# - callback-handler-ssl.crt  (openssl req で作成)
-# - callback-handler-ssl.key  (openssl req で作成) 
+# 注意：
+# SSL証明書は不要になりました（API Gateway Private REST APIを使用）
+# デプロイ時に自動的にSSM Parameter Storeに登録されます 

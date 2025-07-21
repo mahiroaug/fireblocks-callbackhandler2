@@ -23,10 +23,10 @@ Parameters:
     Default: 10.0.0.0/20
     Description: CIDR block for Public Subnet (NAT Gateway)
 
-  PrivateSubnetACIDR:
+  PrivateSubnetCIDR:
     Type: String
     Default: 10.0.128.0/20
-    Description: CIDR block for Private Subnet A (Cosigner + ECS)
+    Description: CIDR block for Private Subnet (Lambda + Cosigner)
 
 Resources:
   # VPC Configuration
@@ -67,16 +67,16 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Private Subnet A (Cosigner + ECS用)
-  PrivateSubnetA:
+  # Private Subnet (Lambda + Cosigner用)
+  PrivateSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Ref PrivateSubnetACIDR
+      CidrBlock: !Ref PrivateSubnetCIDR
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-private-subnet-a-${Environment}
+          Value: !Sub ${ProjectName}-private-subnet-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Type
@@ -107,7 +107,7 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # NAT Gateway用 Elastic IP
+  # Elastic IP for NAT Gateway
   NATGatewayEIP:
     Type: AWS::EC2::EIP
     DependsOn: InternetGatewayAttachment
@@ -154,7 +154,7 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Public Route (Internet Gateway)
+  # Default route to Internet Gateway
   PublicRoute:
     Type: AWS::EC2::Route
     DependsOn: InternetGatewayAttachment
@@ -185,7 +185,7 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # Private Route (NAT Gateway)
+  # Default route to NAT Gateway
   PrivateRoute:
     Type: AWS::EC2::Route
     Properties:
@@ -193,11 +193,11 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NATGateway
 
-  # Private Subnet A Route Table Association
-  PrivateSubnetARouteTableAssociation:
+  # Private Subnet Route Table Association
+  PrivateSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnetA
+      SubnetId: !Ref PrivateSubnet
       RouteTableId: !Ref PrivateRouteTable
 
 Outputs:
@@ -207,42 +207,29 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-VPC-ID
 
+  VPCCidrBlock:
+    Description: VPC CIDR Block
+    Value: !Ref VpcCIDR
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-VPC-CIDR
+
   PublicSubnetId:
     Description: Public Subnet ID
     Value: !Ref PublicSubnet
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PublicSubnet-ID
 
-  PrivateSubnetAId:
-    Description: Private Subnet A ID
-    Value: !Ref PrivateSubnetA
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetA-ID
-
-  # Backward compatibility IDs
   PrivateSubnetId:
-    Description: Private Subnet ID (compatibility)
-    Value: !Ref PrivateSubnetA
+    Description: Private Subnet ID (Lambda + Cosigner)
+    Value: !Ref PrivateSubnet
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
-
-  PrivateSubnetBId:
-    Description: (Deprecated) maps to Private Subnet ID for compatibility
-    Value: !Ref PrivateSubnetA
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetB-ID
 
   PrivateRouteTableId:
     Description: Private Route Table ID
     Value: !Ref PrivateRouteTable
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PrivateRouteTable-ID
-
-  VPCCidrBlock:
-    Description: VPC CIDR Block
-    Value: !Ref VpcCIDR
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-VPC-CIDR
 
   NATGatewayId:
     Description: NAT Gateway ID

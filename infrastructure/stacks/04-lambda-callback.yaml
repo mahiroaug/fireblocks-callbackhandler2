@@ -29,10 +29,10 @@ Resources:
       PackageType: Image
       Code:
         ImageUri: !Ref ContainerImage
-      MemorySize: 512
-      Timeout: 10
+      MemorySize: 1024
+      Timeout: 30
       Role:
-        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-ECSTaskExecutionRole-ARN # reuse existing role (includes SSM perms)
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-LambdaExecutionRole-ARN
       VpcConfig:
         SecurityGroupIds:
           - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-LambdaSecurityGroup-ID
@@ -43,7 +43,7 @@ Resources:
           NODE_ENV: !Ref Environment
           USE_SSM_PARAMETERS: "true"
       ImageConfig:
-        Command: ["index.handler"]
+        Command: ["app.handler"]
       Architectures: [arm64]
       Tags:
         - Key: Environment
@@ -60,6 +60,19 @@ Resources:
       Name: !Sub "${ProjectName}-api-${Environment}"
       EndpointConfiguration:
         Types: [PRIVATE]
+        VpcEndpointIds:
+          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-APIGatewayEndpoint-ID
+      Policy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: execute-api:Invoke
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:PrincipalVpc:
+                  Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
 
   ApiResourceCallback:
     Type: AWS::ApiGateway::Resource
