@@ -292,4 +292,7 @@ deployment-temp/
 *.out
 *.app 
 
+# SSH private keys
+certs/*.pem
+certs/*.pub
 

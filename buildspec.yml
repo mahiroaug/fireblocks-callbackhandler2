@@ -1,0 +1,30 @@
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - "echo '=== Lambda Container Image Build Started ==='"
+      - "echo 'Build started on $(date)'"
+      - "echo 'Working directory $(pwd)'"
+      - "ls -la"
+      - "echo 'Logging in to Amazon ECR'"
+      - "aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI"
+      - "echo 'Environment development'"
+      - "echo 'Building Docker image for Lambda deployment'"
+  build:
+    commands:
+      - "echo '=== Building Lambda Container Image ==='"
+      - "cd app"
+      - "echo 'Current directory $(pwd)'"
+      - "echo 'Building Docker image for Lambda'"
+      - "docker build -t e2e-monitor-cbh:latest ."
+      - "echo 'Tagging image for ECR'"
+      - "docker tag e2e-monitor-cbh:latest $ECR_REPOSITORY_URI:latest"
+      - "echo 'Image build completed'"
+  post_build:
+    commands:
+      - "echo '=== Pushing Docker Image to ECR ==='"
+      - "echo 'Build completed on $(date)'"
+      - "echo 'Pushing Docker image to ECR'"
+      - "docker push $ECR_REPOSITORY_URI:latest"
+      - "echo '=== Docker image successfully pushed to ECR ==='"
+      - "echo 'Note: Lambda function will be created/updated in separate deployment step'"

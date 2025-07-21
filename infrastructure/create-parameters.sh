@@ -133,7 +133,7 @@ cat > "$env_dir/lambda-callback.json" << EOF
 ]
 EOF
 
-# CodeBuild Stack Parameters (template)
+# CodeBuild Stack Parameters
 cat > "$env_dir/codebuild.json" << EOF
 [
     {
@@ -143,10 +143,6 @@ cat > "$env_dir/codebuild.json" << EOF
     {
         "ParameterKey": "Environment",
         "ParameterValue": "${environment}"
-    },
-    {
-        "ParameterKey": "ECRRepositoryURI",
-        "ParameterValue": "PLACEHOLDER_ECR_REPOSITORY_URI"
     }
 ]
 EOF
@@ -165,6 +161,10 @@ cat > "$env_dir/cosigner.json" << EOF
     {
         "ParameterKey": "InstanceType",
         "ParameterValue": "c5.xlarge"
+    },
+    {
+        "ParameterKey": "KeyPairName",
+        "ParameterValue": "PLACEHOLDER_KEY_PAIR_NAME"
     }
 ]
 EOF

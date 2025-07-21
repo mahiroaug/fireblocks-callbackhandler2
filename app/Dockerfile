@@ -24,6 +24,9 @@ COPY src/package*.json ./
 # 依存関係のインストール
 RUN npm install --only=production
 
+# 注意: aws-lambda-ric（Lambda Runtime Interface Emulator）は本番環境では不要
+# AWS Lambda Container Image環境ではAWSが提供するランタイムを使用
+
 # アプリケーションソースコードのコピー
 COPY src/ ./
 
@@ -38,10 +41,6 @@ RUN chown -R nodejs:nodejs /app
 
 # 非rootユーザーに切り替え
 USER nodejs
-
-# Lambda Runtime Interface Emulator のインストール（ローカルテスト用）
-# 本番ではAWS Lambda サービスが提供するランタイムを使用
-RUN npm install -g aws-lambda-ric
 
 # Lambda関数エントリポイント
 CMD ["app.handler"] 

@@ -379,6 +379,50 @@ register_jwt_certificates() {
     print_status "$GREEN" "🎉 JWT certificates successfully registered to SSM Parameter Store"
 }
 
+# Function to setup SSH key for Cosigner
+setup_ssh_key() {
+    local key_name="${PROJECT_NAME}-cosigner-key-${ENVIRONMENT}"
+    local private_key_path="certs/cosigner_ssh_key_${ENVIRONMENT}.pem"
+
+    print_status "$BLUE" "🔑 Setting up SSH key for Cosigner: $key_name"
+
+    # Check if key pair already exists in EC2
+    if aws ec2 describe-key-pairs --key-names "$key_name" --region "$REGION" --profile "$PROFILE" &>/dev/null; then
+        print_status "$GREEN" "✅ SSH key pair '$key_name' already exists in EC2. Using existing key."
+        return 0
+    fi
+
+    print_status "$YELLOW" "⚠️ SSH key pair '$key_name' not found in EC2. Will create/import it."
+
+    # Check for local private key, create if not found
+    if [ ! -f "$private_key_path" ]; then
+        print_status "$BLUE" "📦 Generating new SSH key pair locally..."
+        mkdir -p certs
+        # Generate key without passphrase, in PEM format
+        ssh-keygen -t rsa -b 2048 -f "$private_key_path" -N "" -C "$key_name" -m PEM
+        # Create the .pub file in the correct format
+        ssh-keygen -y -f "$private_key_path" > "${private_key_path}.pub"
+        print_status "$GREEN" "✅ New SSH key pair generated at $private_key_path"
+    else
+        print_status "$GREEN" "✅ Using existing local private key: $private_key_path"
+    fi
+
+    # Import the public key to EC2
+    print_status "$BLUE" "📦 Importing public key to EC2 as '$key_name'..."
+    aws ec2 import-key-pair \
+        --key-name "$key_name" \
+        --public-key-material "fileb://${private_key_path}.pub" \
+        --region "$REGION" \
+        --profile "$PROFILE" --no-paginate || {
+        print_status "$RED" "❌ Failed to import SSH key pair to EC2."
+        print_status "$RED" "    Please check your permissions and the key format."
+        return 1
+    }
+
+    print_status "$GREEN" "✅ SSH key pair '$key_name' successfully imported to EC2."
+    print_status "$YELLOW" "🔒 Important: The private key is stored at ${private_key_path}. Secure it and add it to .gitignore."
+}
+
 # Parameter files are created using infrastructure/create-parameters.sh script
 
 # Function to get stack output
@@ -435,15 +479,15 @@ main() {
     
     # Initialize variables for cross-stack references
     local started=false
-    local ECR_REPO_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${PROJECT_NAME}"
+    local ECR_REPO_URI=""
     
-    # Step 2: Deploy Foundation Stack
+    # Step 1b: Deploy Foundation Stack
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "foundation" ]; then
         started=true
     fi
     
     if [ "$started" == "true" ] && ! should_skip_stack "foundation"; then
-        print_status "$BLUE" "🏗️ Step 2: Deploying foundation stack..."
+        print_status "$BLUE" "🏗️ Step 1b: Deploying foundation stack..."
         if ! deploy_stack "$FOUNDATION_STACK" "infrastructure/stacks/01-foundation.yaml" "infrastructure/parameters/${ENVIRONMENT}/foundation.json" "Foundation (VPC, Subnets)"; then
             print_status "$RED" "❌ Foundation deployment failed. Stopping."
             return 1
@@ -454,13 +498,13 @@ main() {
         print_status "$YELLOW" "⏭️ Skipping Foundation stack (explicitly skipped)"
     fi
     
-    # Step 3: Deploy Security Stack
+    # Step 2: Deploy Security Stack
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "security" ]; then
         started=true
     fi
     
     if [ "$started" == "true" ] && ! should_skip_stack "security"; then
-        print_status "$BLUE" "🔐 Step 3: Deploying security stack..."
+        print_status "$BLUE" "🔐 Step 2: Deploying security stack..."
         if ! deploy_stack "$SECURITY_STACK" "infrastructure/stacks/02-security.yaml" "infrastructure/parameters/${ENVIRONMENT}/security.json" "Security (IAM, Security Groups)"; then
             print_status "$RED" "❌ Security deployment failed. Stopping."
             return 1
@@ -471,36 +515,74 @@ main() {
         print_status "$YELLOW" "⏭️ Skipping Security stack (explicitly skipped)"
     fi
     
-    # Step 5: Deploy CodeBuild Stack (with integrated ECR)
+    # Step 3: Deploy CodeBuild Stack (with integrated ECR)
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "codebuild" ]; then
         started=true
     fi
     
     if [ "$started" == "true" ] && ! should_skip_stack "codebuild"; then
-        print_status "$BLUE" "🔨 Step 5: Deploying CodeBuild automation (with ECR)..."
+        print_status "$BLUE" "🔨 Step 3: Deploying CodeBuild automation (with ECR)..."
         
-        # Update (overwrite) ECR Repository URI in codebuild.json every time
-        if [ -f "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" ]; then
-            tmp_json=$(mktemp)
-            jq --arg uri "${ECR_REPO_URI}" 'map(if .ParameterKey=="ECRRepositoryURI" then .ParameterValue=$uri else . end)' \
-              "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" > "$tmp_json" && \
-              mv "$tmp_json" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json"
-            print_status "$GREEN" "✅ Set ECRRepositoryURI to $ECR_REPO_URI in codebuild.json"
-        else
+        # CodeBuild stack creates ECR repository internally - no URI update needed
+        if [ ! -f "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" ]; then
             print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/codebuild.json"
             print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"
             return 1
         fi
+        print_status "$GREEN" "✅ CodeBuild parameters ready (ECR repository will be created automatically)"
         
         if deploy_stack "$CODEBUILD_STACK" "infrastructure/stacks/03-codebuild-automation.yaml" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" "CodeBuild + ECR"; then
-            print_status "$GREEN" "ECR Repository URI: $ECR_REPO_URI"
+            # Get outputs from CodeBuild stack
+            ECR_REPO_URI=$(get_stack_output "$CODEBUILD_STACK" "ECRRepositoryURI")
+            SOURCE_BUCKET=$(get_stack_output "$CODEBUILD_STACK" "SourceCodeBucketName")
+            
+            if [ -z "$ECR_REPO_URI" ] || [ -z "$SOURCE_BUCKET" ]; then
+                print_status "$RED" "❌ Failed to get required outputs from CodeBuild stack"
+                return 1
+            fi
+            print_status "$GREEN" "✅ ECR Repository URI: $ECR_REPO_URI"
+            print_status "$GREEN" "✅ Source Code Bucket: $SOURCE_BUCKET"
+            
+            # Upload local source code to S3
+            print_status "$BLUE" "📦 Uploading local source code to S3..."
+            if [ ! -d "app" ]; then
+                print_status "$RED" "❌ app directory not found"
+                return 1
+            fi
+            
+            # Create source.zip with app directory and buildspec
+            print_status "$BLUE" "Creating source.zip from app directory and buildspec..."
+            if [ ! -f "buildspec.yml" ]; then
+                print_status "$RED" "❌ buildspec.yml not found"
+                return 1
+            fi
+            zip -r source.zip app/ buildspec.yml
+            
+            # Upload to S3
+            aws s3 cp source.zip "s3://${SOURCE_BUCKET}/source.zip" \
+                --region "$REGION" \
+                --profile "$PROFILE" || {
+                print_status "$RED" "❌ Failed to upload source code to S3"
+                return 1
+            }
+            
+            # Clean up
+            rm -f source.zip
+            print_status "$GREEN" "✅ Source code uploaded to S3"
 
             # -------------------------------------------
-            # 🔨 追加: CodeBuild で初回 Docker ビルドを自動実行
+            # 🔨 CodeBuild で Docker イメージをビルド＆ECRプッシュ
             # -------------------------------------------
-            print_status "$BLUE" "🏃‍♂️  Starting initial CodeBuild build (Docker image push)..."
+            print_status "$BLUE" "🏃‍♂️  Starting CodeBuild for Docker image build..."
+            # Get CodeBuild project name from stack output
+            CODEBUILD_PROJECT_NAME=$(get_stack_output "$CODEBUILD_STACK" "CodeBuildProjectName")
+            if [ -z "$CODEBUILD_PROJECT_NAME" ]; then
+                print_status "$RED" "❌ Failed to get CodeBuild project name from stack output"
+                return 1
+            fi
+            
             BUILD_ID=$(aws codebuild start-build \
-                --project-name "${PROJECT_NAME}-build-${ENVIRONMENT}" \
+                --project-name "$CODEBUILD_PROJECT_NAME" \
                 --region "$REGION" \
                 --profile "$PROFILE" \
                 --query 'build.id' --output text --no-paginate) || {
@@ -523,7 +605,7 @@ main() {
             done
 
             if [ "$STATUS" == "SUCCEEDED" ]; then
-              print_status "$GREEN" "✅ CodeBuild build succeeded; Docker image pushed"
+              print_status "$GREEN" "✅ CodeBuild build succeeded; Docker image pushed to ECR"
             else
               print_status "$RED" "❌ CodeBuild build finished with status: $STATUS"
               return 1
@@ -534,11 +616,20 @@ main() {
         fi
     elif [ "$started" == "false" ]; then
         print_status "$YELLOW" "⏭️ Skipping CodeBuild stack (before start point)"
+        # --from-stack で途中から実行した場合もECR_REPO_URIを取得する
+        if stack_exists "$CODEBUILD_STACK"; then
+            ECR_REPO_URI=$(get_stack_output "$CODEBUILD_STACK" "ECRRepositoryURI")
+            if [ -z "$ECR_REPO_URI" ]; then
+                print_status "$RED" "❌ Failed to get ECR Repository URI from existing CodeBuild stack"
+                return 1
+            fi
+            print_status "$GREEN" "✅ Fetched ECR Repository URI from existing stack: $ECR_REPO_URI"
+        fi
     else
         print_status "$YELLOW" "⏭️ Skipping CodeBuild stack (explicitly skipped)"
     fi
     
-    # Step 6: Deploy Lambda Callback Stack
+    # Step 4: Deploy Lambda Callback Stack  
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "lambda" ]; then
         started=true
     fi
@@ -569,7 +660,7 @@ main() {
         print_status "$YELLOW" "⏭️ Skipping Lambda Callback stack (explicitly skipped)"
     fi
     
-    # Step 7: Deploy Cosigner Stack (optional)
+    # Step 5: Deploy Cosigner Stack (optional)
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "cosigner" ]; then
         started=true
     fi
@@ -577,6 +668,27 @@ main() {
     if [ "$started" == "true" ] && ! should_skip_stack "cosigner"; then
         print_status "$BLUE" "👤 Step 5: Deploying cosigner stack (optional)..."
         
+        # Setup SSH key before deploying Cosigner
+        if ! setup_ssh_key; then
+            print_status "$RED" "❌ SSH key setup failed. Stopping Cosigner deployment."
+            return 1
+        fi
+
+        # Update KeyPairName parameter in cosigner.json
+        local key_name="${PROJECT_NAME}-cosigner-key-${ENVIRONMENT}"
+        local cosigner_params_file="infrastructure/parameters/${ENVIRONMENT}/cosigner.json"
+        
+        if [ -f "$cosigner_params_file" ]; then
+            tmp_cosigner=$(mktemp)
+            jq --arg key "$key_name" 'map(if .ParameterKey=="KeyPairName" then .ParameterValue=$key else . end)' \
+              "$cosigner_params_file" > "$tmp_cosigner" && \
+              mv "$tmp_cosigner" "$cosigner_params_file"
+            print_status "$GREEN" "✅ Set KeyPairName to '$key_name' in $cosigner_params_file"
+        else
+            print_status "$RED" "❌ Parameter file not found: $cosigner_params_file"
+            return 1
+        fi
+
         # Check if cosigner parameter file exists
         if [ ! -f "infrastructure/parameters/${ENVIRONMENT}/cosigner.json" ]; then
             print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/cosigner.json"
@@ -607,7 +719,7 @@ main() {
     print_status "$GREEN" "  1️⃣ Foundation Stack: $FOUNDATION_STACK"
     print_status "$GREEN" "  2️⃣ Security Stack: $SECURITY_STACK"
     print_status "$GREEN" "  3️⃣ CodeBuild + ECR: $CODEBUILD_STACK"
-    print_status "$GREEN" "  4️⃣ Callback Handler: $CALLBACK_HANDLER_STACK"
+    print_status "$GREEN" "  4️⃣ Lambda Callback: $LAMBDA_CALLBACK_STACK"
     print_status "$GREEN" "  5️⃣ Cosigner: $COSIGNER_STACK"
     
     print_status "$BLUE" "================================================="

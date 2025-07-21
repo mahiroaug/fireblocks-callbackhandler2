@@ -13,11 +13,6 @@ Parameters:
     AllowedValues: [dev, stg, prod]
     Description: Environment name
 
-  GitHubRepo:
-    Type: String
-    Default: "https://github.com/your-org/fireblocks-callback-handler.git"
-    Description: GitHub repository URL (optional for manual builds)
-
   AppSubDirectory:
     Type: String
     Default: "app"
@@ -124,33 +119,17 @@ Resources:
                   - ecr:GetAuthorizationToken
                 Resource: "*"
               # VPC Network Interfaces (for VPC build)
+
+              # S3 for source code
               - Effect: Allow
                 Action:
-                  - ec2:CreateNetworkInterface
-                  - ec2:DescribeNetworkInterfaces
-                  - ec2:DeleteNetworkInterface
-                  - ec2:AttachNetworkInterface
-                  - ec2:DetachNetworkInterface
-                Resource: "*"
-              # Lambda Function Update
-              - Effect: Allow
-                Action:
-                  - lambda:UpdateFunctionCode
-                  - lambda:UpdateFunctionConfiguration
-                  - lambda:GetFunction
-                  - lambda:ListVersionsByFunction
-                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-callback-${Environment}"
-              # S3 for build artifacts
-              - Effect: Allow
-                Action:
-                  - s3:GetBucketAcl
                   - s3:GetBucketLocation
                   - s3:GetObject
                   - s3:GetObjectVersion
-                  - s3:PutObject
                 Resource:
-                  - !Sub "arn:aws:s3:::${ProjectName}-build-artifacts-${Environment}-${AWS::AccountId}"
-                  - !Sub "arn:aws:s3:::${ProjectName}-build-artifacts-${Environment}-${AWS::AccountId}/*"
+                  - !GetAtt SourceCodeBucket.Arn
+                  - !Sub "${SourceCodeBucket.Arn}/*"
+
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -161,11 +140,11 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # S3 Bucket for Build Artifacts
-  BuildArtifactsBucket:
+  # S3 Bucket for Source Code Upload
+  SourceCodeBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${ProjectName}-build-artifacts-${Environment}-${AWS::AccountId}"
+      BucketName: !Sub "${ProjectName}-source-${Environment}-${AWS::AccountId}"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -179,9 +158,9 @@ Resources:
         RestrictPublicBuckets: true
       LifecycleConfiguration:
         Rules:
-          - Id: DeleteOldArtifacts
+          - Id: DeleteOldSources
             Status: Enabled
-            ExpirationInDays: 30
+            ExpirationInDays: 7
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -200,9 +179,7 @@ Resources:
       Description: "Build Lambda Container Image for Fireblocks Callback Handler"
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts:
-        Type: S3
-        Location: !Sub "${BuildArtifactsBucket}/artifacts"
-        Name: "build-output"
+        Type: NO_ARTIFACTS
       Environment:
         Type: LINUX_CONTAINER
         ComputeType: BUILD_GENERAL1_MEDIUM
@@ -221,75 +198,13 @@ Resources:
             Value: !Ref ProjectName
           - Name: ENVIRONMENT
             Value: !Ref Environment
-          - Name: LAMBDA_FUNCTION_NAME
-            Value: !Sub ${ProjectName}-callback-${Environment}
           - Name: APP_SUB_DIRECTORY
             Value: !Ref AppSubDirectory
-          # Lambda専用環境変数
-          - Name: LAMBDA_HANDLER
-            Value: "app.handler"
-          - Name: NODE_ENV
-            Value: "production"
-          - Name: USE_SSM_PARAMETERS
-            Value: "true"
       Source:
         Type: S3
-        Location: !Sub "${BuildArtifactsBucket}/source.zip"
-        BuildSpec: |
-          version: 0.2
-          phases:
-            pre_build:
-              commands:
-                - echo "=== Lambda Container Image Build Started ==="
-                - echo "Build started on $(date)"
-                - echo "Logging in to Amazon ECR..."
-                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
-                - echo "Environment: $ENVIRONMENT"
-                - echo "Lambda Function: $LAMBDA_FUNCTION_NAME"
-                - echo "Handler: $LAMBDA_HANDLER"
-            build:
-              commands:
-                - echo "=== Building Lambda Container Image ==="
-                - cd $APP_SUB_DIRECTORY
-                - echo "Current directory: $(pwd)"
-                - echo "Building Docker image for Lambda..."
-                - docker build -t $PROJECT_NAME:$IMAGE_TAG .
-                - echo "Tagging image for ECR..."
-                - docker tag $PROJECT_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:$IMAGE_TAG
-                - docker tag $PROJECT_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:build-$(date +%Y%m%d-%H%M%S)
-                - echo "Image build completed"
-            post_build:
-              commands:
-                - echo "=== Pushing Image and Updating Lambda ==="
-                - echo "Build completed on $(date)"
-                - echo "Pushing Docker images to ECR..."
-                - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
-                - docker push $ECR_REPOSITORY_URI:build-$(date +%Y%m%d-%H%M%S)
-                - echo "Updating Lambda function with new container image..."
-                - |
-                  aws lambda update-function-code \
-                    --function-name $LAMBDA_FUNCTION_NAME \
-                    --image-uri $ECR_REPOSITORY_URI:$IMAGE_TAG \
-                    --region $AWS_DEFAULT_REGION
-                - echo "Updating Lambda function configuration..."
-                - |
-                  aws lambda update-function-configuration \
-                    --function-name $LAMBDA_FUNCTION_NAME \
-                    --environment Variables="{NODE_ENV=$NODE_ENV,USE_SSM_PARAMETERS=$USE_SSM_PARAMETERS}" \
-                    --timeout 30 \
-                    --memory-size 512 \
-                    --region $AWS_DEFAULT_REGION
-                - echo "=== Lambda Container Image deployment completed successfully ==="
-          artifacts:
-            files:
-              - '**/*'
-      VpcConfig:
-        VpcId:
-          Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-        Subnets:
-          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
-        SecurityGroupIds:
-          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPCEndpointSecurityGroup-ID
+        Location: !Sub "${SourceCodeBucket}/source.zip"
+        BuildSpec: buildspec.yml
+
       TimeoutInMinutes: 20
       Tags:
         - Key: Name
@@ -415,11 +330,11 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CodeBuildProject-Name
 
-  BuildArtifactsBucketName:
-    Description: S3 Bucket for Build Artifacts
-    Value: !Ref BuildArtifactsBucket
+  SourceCodeBucketName:
+    Description: S3 Bucket for Source Code Upload
+    Value: !Ref SourceCodeBucket
     Export:
-      Name: !Sub ${ProjectName}-${Environment}-BuildArtifacts-Bucket
+      Name: !Sub ${ProjectName}-${Environment}-SourceCode-Bucket
 
   BuildTriggerFunctionArn:
     Description: Lambda Function ARN for triggering builds

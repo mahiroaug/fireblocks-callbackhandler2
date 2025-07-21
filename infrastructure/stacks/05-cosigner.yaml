@@ -76,7 +76,7 @@ Resources:
       SecurityGroupIds:
         - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerSecurityGroup-ID
       IamInstanceProfile:
-        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerInstanceProfile-ARN
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerInstanceProfile-Name
       KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
       EnclaveOptions:
         Enabled: true
@@ -84,7 +84,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum update -y
-          yum install -y amazon-ssm-agent amazon-cloudwatch-agent
+          yum install -y amazon-ssm-agent
 
           # Enable and start SSM Agent
           systemctl enable amazon-ssm-agent
@@ -100,10 +100,6 @@ Resources:
           systemctl enable nitro-enclaves-allocator.service
           systemctl start nitro-enclaves-allocator.service
 
-          # Install CloudWatch Agent
-          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-            -a fetch-config -m ec2 -s -c ssm:${CloudWatchAgentConfig}
-
           # Create cosigner directory
           mkdir -p /home/ec2-user/cosigner
           chown ec2-user:ec2-user /home/ec2-user/cosigner
@@ -114,13 +110,6 @@ Resources:
           # Store environment variables for later use
           echo "ENVIRONMENT=${Environment}" >> /home/ec2-user/.env
           chown ec2-user:ec2-user /home/ec2-user/.env
-
-          # Signal completion
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource CosignerInstance --region ${AWS::Region}
-      CreationPolicy:
-        ResourceSignal:
-          Timeout: PT10M
-          Count: 1
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-cosigner-${Environment}
@@ -134,63 +123,6 @@ Resources:
           Value: fireblocks-callback-handler
         - Key: ManagedBy
           Value: cloudformation
-
-  # CloudWatch Agent Configuration
-  CloudWatchAgentConfig:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/aws/ec2/${ProjectName}-cosigner-${Environment}/cloudwatch-agent-config"
-      Type: String
-      Value: !Sub |
-        {
-          "logs": {
-            "logs_collected": {
-              "files": {
-                "collect_list": [
-                  {
-                    "file_path": "/var/log/cosigner-init.log",
-                    "log_group_name": "${CosignerLogGroup}",
-                    "log_stream_name": "{instance_id}/cosigner-init"
-                  },
-                  {
-                    "file_path": "/var/log/nitro-enclaves-allocator.log",
-                    "log_group_name": "${CosignerLogGroup}",
-                    "log_stream_name": "{instance_id}/nitro-enclaves"
-                  }
-                ]
-              }
-            }
-          },
-          "metrics": {
-            "namespace": "CWAgent",
-            "metrics_collected": {
-              "cpu": {
-                "measurement": [
-                  "cpu_usage_idle",
-                  "cpu_usage_iowait",
-                  "cpu_usage_user",
-                  "cpu_usage_system"
-                ],
-                "metrics_collection_interval": 60
-              },
-              "disk": {
-                "measurement": [
-                  "used_percent"
-                ],
-                "metrics_collection_interval": 60,
-                "resources": [
-                  "*"
-                ]
-              },
-              "mem": {
-                "measurement": [
-                  "mem_used_percent"
-                ],
-                "metrics_collection_interval": 60
-              }
-            }
-          }
-        }
 
   # CloudWatch Alarms for Cosigner
   HighCPUAlarm:

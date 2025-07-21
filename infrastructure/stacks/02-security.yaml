@@ -154,6 +154,16 @@ Resources:
             Principal: "*"
             Action: "ssm:*"
             Resource: "*"
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: "ssm:PutParameter"
+            Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/*"
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: "ssm:PutParameter"
+            Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/aws/ec2/${ProjectName}-*"
 
   # SSM Messages Endpoint
   SSMMessagesEndpoint:
@@ -267,10 +277,18 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - ssm:PutParameter
                   - ssm:GetParameter
                   - ssm:GetParameters
                   - ssm:GetParametersByPath
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/fireblocks-callback-infrastructure/*"
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/*"
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/aws/ec2/${ProjectName}-*"
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -433,6 +451,12 @@ Outputs:
     Value: !GetAtt CosignerInstanceProfile.Arn
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerInstanceProfile-ARN
+
+  CosignerInstanceProfileName:
+    Description: Cosigner Instance Profile Name
+    Value: !Ref CosignerInstanceProfile
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CosignerInstanceProfile-Name
 
   # Lambda Execution Role (旧ECSTaskExecutionRole互換)
   LambdaExecutionRoleArn:

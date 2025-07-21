@@ -112,21 +112,34 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CallbackLambda.Arn}/invocations"
 
-  # Permission for API Gateway to invoke Lambda
-  LambdaInvokePermission:
+  # Permission for API Gateway to invoke Lambda for POST /callback
+  CallbackPostPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Ref CallbackLambda
+      FunctionName: !GetAtt CallbackLambda.Arn
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/*/*/*"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/prod/POST/callback"
+
+  # Permission for API Gateway to invoke Lambda for GET /health
+  HealthGetPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CallbackLambda.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/prod/GET/health"
 
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref PrivateRestApi
       StageName: prod
-    DependsOn: [CallbackPostMethod, HealthGetMethod]
+    DependsOn:
+      - CallbackPostMethod
+      - HealthGetMethod
+      - CallbackPostPermission
+      - HealthGetPermission
 
 Outputs:
   LambdaArn:
