@@ -53,15 +53,11 @@ region=$(jq -r '.Region' "$COMMON_CONFIG")
 vpc_cidr=$(jq -r '.NetworkConfig.VpcCidr' "$COMMON_CONFIG")
 public_subnet_cidr=$(jq -r '.NetworkConfig.PublicSubnetCidr' "$COMMON_CONFIG")
 private_subnet_cidr=$(jq -r '.NetworkConfig.PrivateSubnetCidr' "$COMMON_CONFIG")
-domain_name=$(jq -r '.DomainConfig.InternalDomain' "$COMMON_CONFIG")
 
 # Override environment if provided as argument
 if [ "$ENVIRONMENT" != "dev" ]; then
     environment="$ENVIRONMENT"
 fi
-
-# Calculate the second private subnet CIDR (increment by 16)
-private_subnet_b_cidr=$(echo "$private_subnet_cidr" | sed 's/\.128\./.144./')
 
 # Create environment directory
 env_dir="infrastructure/parameters/${environment}"
@@ -91,10 +87,6 @@ cat > "$env_dir/foundation.json" << EOF
     {
         "ParameterKey": "PrivateSubnetACIDR",
         "ParameterValue": "${private_subnet_cidr}"
-    },
-    {
-        "ParameterKey": "PrivateSubnetBCIDR",
-        "ParameterValue": "${private_subnet_b_cidr}"
     }
 ]
 EOF
@@ -119,32 +111,6 @@ cat > "$env_dir/security.json" << EOF
     {
         "ParameterKey": "Environment",
         "ParameterValue": "${environment}"
-    },
-    {
-        "ParameterKey": "DomainName",
-        "ParameterValue": "${domain_name}"
-    },
-    {
-        "ParameterKey": "SSLCertificateArn",
-        "ParameterValue": "${existing_ssl_cert_arn}"
-    }
-]
-EOF
-
-# DNS Stack Parameters
-cat > "$env_dir/dns.json" << EOF
-[
-    {
-        "ParameterKey": "ProjectName",
-        "ParameterValue": "${project_name}"
-    },
-    {
-        "ParameterKey": "Environment",
-        "ParameterValue": "${environment}"
-    },
-    {
-        "ParameterKey": "DomainName",
-        "ParameterValue": "${domain_name}"
     }
 ]
 EOF
@@ -163,10 +129,6 @@ cat > "$env_dir/callback-handler.json" << EOF
     {
         "ParameterKey": "ContainerImage",
         "ParameterValue": "PLACEHOLDER_CONTAINER_IMAGE"
-    },
-    {
-        "ParameterKey": "SSLCertificateArn",
-        "ParameterValue": "${existing_ssl_cert_arn}"
     }
 ]
 EOF
@@ -211,7 +173,6 @@ print_status "$GREEN" "✅ Parameter files created successfully!"
 print_status "$BLUE" "📁 Files created in: $env_dir"
 print_status "$BLUE" "  - foundation.json"
 print_status "$BLUE" "  - security.json"
-print_status "$BLUE" "  - dns.json"
 print_status "$BLUE" "  - callback-handler.json"
 print_status "$BLUE" "  - codebuild.json"
 print_status "$BLUE" "  - cosigner.json"
@@ -236,11 +197,4 @@ print_status "$YELLOW" "   Replace: PLACEHOLDER_SSL_CERTIFICATE_ARN"
 print_status "$YELLOW" "   With: arn:aws:acm:${region}:ACCOUNT_ID:certificate/CERTIFICATE_ID"
 print_status "$YELLOW" ""
 print_status "$YELLOW" "4. Run deployment:"
-print_status "$YELLOW" "   ./infrastructure/deploy-automated.sh -p <aws_profile>"
-
-# Check if SSL cert ARN is still placeholder
-if [ "$existing_ssl_cert_arn" == "PLACEHOLDER_SSL_CERTIFICATE_ARN" ]; then
-    print_status "$RED" ""
-    print_status "$RED" "⚠️  SSL Certificate ARN is still placeholder!"
-    print_status "$RED" "    Please complete steps 1-3 above before running deployment."
-fi 
+print_status "$YELLOW" "   ./infrastructure/deploy-automated.sh -p <aws_profile>" 

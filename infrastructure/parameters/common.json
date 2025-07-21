@@ -1,50 +1,10 @@
 {
   "ProjectName": "e2e-monitor-cbh",
-  "Environment": "dev",
   "Region": "ap-northeast-1",
-  
-  "StackNaming": {
-    "Foundation": "foundation",
-    "Security": "security", 
-    "DNS": "dns",
-    "CallbackHandler": "callback-handler",
-    "Cosigner": "cosigner"
-  },
-  
-  "ResourceNaming": {
-    "VPC": "vpc",
-    "PublicSubnet": "public-subnet",
-    "PrivateSubnet": "private-subnet",
-    "InternetGateway": "igw",
-    "NATGateway": "nat-gateway",
-    "RouteTable": "rt",
-    "SecurityGroup": "sg",
-    "IAMRole": "role",
-    "VPCEndpoint": "vpce",
-    "LoadBalancer": "alb",
-    "ECSCluster": "ecs-cluster",
-    "ECSService": "ecs-service",
-    "ECSTaskDefinition": "ecs-task",
-    "EC2Instance": "ec2",
-    "HostedZone": "phz",
-    "LogGroup": "logs",
-    "Alarm": "alarm"
-  },
-  
+  "Environment": "dev",
   "NetworkConfig": {
     "VpcCidr": "10.0.0.0/16",
     "PublicSubnetCidr": "10.0.0.0/20",
     "PrivateSubnetCidr": "10.0.128.0/20"
-  },
-  
-  "DomainConfig": {
-    "InternalDomain": "callback-handler.internal"
-  },
-  
-  "Tags": {
-    "Project": "e2e-monitor-cbh",
-    "Owner": "e2e-monitor-team",
-    "Environment": "dev",
-    "ManagedBy": "cloudformation"
   }
 } 

@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Fireblocks Callback Handler - Lambda + API Gateway (Private)"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Project name for resource naming
+  Environment:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+    Description: Environment name
+  ContainerImage:
+    Type: String
+    Description: ECR image URI (e.g. xxxx.dkr.ecr.ap-northeast-1.amazonaws.com/repo:tag)
+
+Resources:
+  # Log group
+  CallbackLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-callback-${Environment}"
+      RetentionInDays: 30
+
+  # Lambda Function (Container)
+  CallbackLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-callback-${Environment}"
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ContainerImage
+      MemorySize: 512
+      Timeout: 10
+      Role:
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-ECSTaskExecutionRole-ARN # reuse existing role (includes SSM perms)
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-LambdaSecurityGroup-ID
+        SubnetIds:
+          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+      Environment:
+        Variables:
+          NODE_ENV: !Ref Environment
+          USE_SSM_PARAMETERS: "true"
+      ImageConfig:
+        Command: ["index.handler"]
+      Architectures: [arm64]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: lambda
+        - Key: Project
+          Value: fireblocks-callback-handler
+
+  # API Gateway Private REST API
+  PrivateRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-api-${Environment}"
+      EndpointConfiguration:
+        Types: [PRIVATE]
+
+  ApiResourceCallback:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ParentId: !GetAtt PrivateRestApi.RootResourceId
+      PathPart: callback
+
+  ApiResourceHealth:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ParentId: !GetAtt PrivateRestApi.RootResourceId
+      PathPart: health
+
+  CallbackPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ResourceId: !Ref ApiResourceCallback
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CallbackLambda.Arn}/invocations"
+
+  HealthGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ResourceId: !Ref ApiResourceHealth
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CallbackLambda.Arn}/invocations"
+
+  # Permission for API Gateway to invoke Lambda
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CallbackLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/*/*/*"
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      StageName: prod
+    DependsOn: [CallbackPostMethod, HealthGetMethod]
+
+Outputs:
+  LambdaArn:
+    Description: Callback Lambda ARN
+    Value: !Ref CallbackLambda
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CallbackLambda-ARN
+
+  ApiGatewayInvokeUrl:
+    Description: The invoke URL for the API Gateway stage
+    Value: !Sub "https://${PrivateRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ApiGatewayInvokeUrl

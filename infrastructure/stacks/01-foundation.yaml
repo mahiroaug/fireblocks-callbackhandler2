@@ -28,11 +28,6 @@ Parameters:
     Default: 10.0.128.0/20
     Description: CIDR block for Private Subnet A (Cosigner + ECS)
 
-  PrivateSubnetBCIDR:
-    Type: String
-    Default: 10.0.144.0/20
-    Description: CIDR block for Private Subnet B (Cosigner + ECS)
-
 Resources:
   # VPC Configuration
   VPC:
@@ -59,7 +54,6 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Ref PublicSubnetCIDR
-      AvailabilityZone: !Select [0, !GetAZs ""]
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
@@ -79,31 +73,10 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       CidrBlock: !Ref PrivateSubnetACIDR
-      AvailabilityZone: !Select [0, !GetAZs ""]
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-private-subnet-a-${Environment}
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Type
-          Value: Private
-        - Key: Project
-          Value: fireblocks-callback-handler
-        - Key: ManagedBy
-          Value: cloudformation
-
-  # Private Subnet B (Cosigner + ECS用)
-  PrivateSubnetB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Ref PrivateSubnetBCIDR
-      AvailabilityZone: !Select [1, !GetAZs ""]
-      MapPublicIpOnLaunch: false
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-private-subnet-b-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Type
@@ -227,13 +200,6 @@ Resources:
       SubnetId: !Ref PrivateSubnetA
       RouteTableId: !Ref PrivateRouteTable
 
-  # Private Subnet B Route Table Association
-  PrivateSubnetBRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PrivateSubnetB
-      RouteTableId: !Ref PrivateRouteTable
-
 Outputs:
   VPCId:
     Description: VPC ID
@@ -253,18 +219,18 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetA-ID
 
-  PrivateSubnetBId:
-    Description: Private Subnet B ID
-    Value: !Ref PrivateSubnetB
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetB-ID
-
-  # Backward compatibility - ALB will use this for primary subnet
+  # Backward compatibility IDs
   PrivateSubnetId:
-    Description: Private Subnet ID (Primary - for backward compatibility)
+    Description: Private Subnet ID (compatibility)
     Value: !Ref PrivateSubnetA
     Export:
       Name: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+
+  PrivateSubnetBId:
+    Description: (Deprecated) maps to Private Subnet ID for compatibility
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-PrivateSubnetB-ID
 
   PrivateRouteTableId:
     Description: Private Route Table ID

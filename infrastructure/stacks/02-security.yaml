@@ -13,16 +13,6 @@ Parameters:
     AllowedValues: [dev, stg, prod]
     Description: Environment name
 
-  DomainName:
-    Type: String
-    Default: callback-handler.internal
-    Description: Domain name for SSL certificate
-
-  SSLCertificateArn:
-    Type: String
-    Description: SSL certificate ARN (imported to ACM)
-    Default: "arn:aws:acm:ap-northeast-1:123456789012:certificate/00000000-1111-2222-3333-444444444444"
-
 Resources:
   # Cosigner用セキュリティグループ
   CosignerSecurityGroup:
@@ -79,6 +69,25 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-vpc-endpoint-sg-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: security
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # Lambda 用セキュリティグループ
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda Callback Handler
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-lambda-sg-${Environment}
         - Key: Environment
           Value: !Ref Environment
         - Key: Stack
@@ -195,6 +204,28 @@ Resources:
       ToPort: 443
       SourceSecurityGroupId: !Ref ECSSecurityGroup
       Description: "HTTPS from ECS"
+
+  # Lambda -> VPC Endpoints
+  LambdaToVPCEndpointsRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref LambdaSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
+      Description: "HTTPS to VPC Endpoints"
+
+  # VPC Endpoints <- Lambda
+  VPCEndpointsFromLambdaRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref VPCEndpointSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Description: "HTTPS from Lambda"
 
   # S3 Gateway Endpoint
   S3GatewayEndpoint:
@@ -357,7 +388,7 @@ Resources:
       Roles:
         - !Ref CosignerRole
 
-  # ECS Task Execution Role
+  # ECS Task Execution Role (Lambda共用)
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -367,7 +398,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: ecs-tasks.amazonaws.com
+              Service:
+                - ecs-tasks.amazonaws.com
+                - lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
@@ -386,6 +419,14 @@ Resources:
                 Action:
                   - kms:Decrypt
                 Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AttachNetworkInterface
+                  - ec2:DetachNetworkInterface
+                Resource: "*"
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -519,6 +560,12 @@ Outputs:
     Export:
       Name: !Sub ${ProjectName}-${Environment}-VPCEndpointSecurityGroup-ID
 
+  LambdaSecurityGroupId:
+    Description: Lambda Security Group ID
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-LambdaSecurityGroup-ID
+
   CosignerRoleArn:
     Description: Cosigner IAM Role ARN
     Value: !GetAtt CosignerRole.Arn
@@ -554,9 +601,3 @@ Outputs:
     Value: !GetAtt CosignerKMSKey.Arn
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerKMSKey-ARN
-
-  SSLCertificateArn:
-    Description: SSL Certificate ARN
-    Value: !Ref SSLCertificateArn
-    Export:
-      Name: !Sub ${ProjectName}-${Environment}-SSLCertificate-ARN

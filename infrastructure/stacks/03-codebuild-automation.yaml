@@ -1,0 +1,444 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Fireblocks Callback Handler - CodeBuild Automation (ECR + Docker Build + Lambda Update)"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: fireblocks-cbh
+    Description: Project name for resource naming
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stg, prod]
+    Description: Environment name
+
+  GitHubRepo:
+    Type: String
+    Default: "https://github.com/your-org/fireblocks-callback-handler.git"
+    Description: GitHub repository URL (optional for manual builds)
+
+  AppSubDirectory:
+    Type: String
+    Default: "app"
+    Description: Subdirectory containing Dockerfile and application code
+
+Resources:
+  # ECR Repository for Lambda container images
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${ProjectName}-lambda-${Environment}
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 tagged images",
+                "selection": {
+                  "tagStatus": "tagged",
+                  "tagPrefixList": ["latest", "v"],
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Delete untagged images older than 1 day",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ecr-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: codebuild-automation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # CloudWatch Log Group for CodeBuild
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${ProjectName}-build-${Environment}"
+      RetentionInDays: 30
+
+  # IAM Role for CodeBuild
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-codebuild-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt CodeBuildLogGroup.Arn
+                  - !Sub "${CodeBuildLogGroup.Arn}:*"
+              # ECR Operations
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource:
+                  - !GetAtt ECRRepository.Arn
+                  - !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*"
+              # ECR Authorization
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              # VPC Network Interfaces (for VPC build)
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AttachNetworkInterface
+                  - ec2:DetachNetworkInterface
+                Resource: "*"
+              # Lambda Function Update
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:GetFunction
+                  - lambda:ListVersionsByFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-callback-${Environment}"
+              # S3 for build artifacts
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-build-artifacts-${Environment}-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-build-artifacts-${Environment}-${AWS::AccountId}/*"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: codebuild-automation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # S3 Bucket for Build Artifacts
+  BuildArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-build-artifacts-${Environment}-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: codebuild-automation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # CodeBuild Project for Lambda Container Image Build
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${ProjectName}-build-${Environment}
+      Description: "Build Lambda Container Image for Fireblocks Callback Handler"
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Sub "${BuildArtifactsBucket}/artifacts"
+        Name: "build-output"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: true # Required for Docker builds
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: ECR_REPOSITORY_URI
+            Value: !GetAtt ECRRepository.RepositoryUri
+          - Name: IMAGE_TAG
+            Value: latest
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: LAMBDA_FUNCTION_NAME
+            Value: !Sub ${ProjectName}-callback-${Environment}
+          - Name: APP_SUB_DIRECTORY
+            Value: !Ref AppSubDirectory
+          # Lambda専用環境変数
+          - Name: LAMBDA_HANDLER
+            Value: "app.handler"
+          - Name: NODE_ENV
+            Value: "production"
+          - Name: USE_SSM_PARAMETERS
+            Value: "true"
+      Source:
+        Type: S3
+        Location: !Sub "${BuildArtifactsBucket}/source.zip"
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "=== Lambda Container Image Build Started ==="
+                - echo "Build started on $(date)"
+                - echo "Logging in to Amazon ECR..."
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+                - echo "Environment: $ENVIRONMENT"
+                - echo "Lambda Function: $LAMBDA_FUNCTION_NAME"
+                - echo "Handler: $LAMBDA_HANDLER"
+            build:
+              commands:
+                - echo "=== Building Lambda Container Image ==="
+                - cd $APP_SUB_DIRECTORY
+                - echo "Current directory: $(pwd)"
+                - echo "Building Docker image for Lambda..."
+                - docker build -t $PROJECT_NAME:$IMAGE_TAG .
+                - echo "Tagging image for ECR..."
+                - docker tag $PROJECT_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:$IMAGE_TAG
+                - docker tag $PROJECT_NAME:$IMAGE_TAG $ECR_REPOSITORY_URI:build-$(date +%Y%m%d-%H%M%S)
+                - echo "Image build completed"
+            post_build:
+              commands:
+                - echo "=== Pushing Image and Updating Lambda ==="
+                - echo "Build completed on $(date)"
+                - echo "Pushing Docker images to ECR..."
+                - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+                - docker push $ECR_REPOSITORY_URI:build-$(date +%Y%m%d-%H%M%S)
+                - echo "Updating Lambda function with new container image..."
+                - |
+                  aws lambda update-function-code \
+                    --function-name $LAMBDA_FUNCTION_NAME \
+                    --image-uri $ECR_REPOSITORY_URI:$IMAGE_TAG \
+                    --region $AWS_DEFAULT_REGION
+                - echo "Updating Lambda function configuration..."
+                - |
+                  aws lambda update-function-configuration \
+                    --function-name $LAMBDA_FUNCTION_NAME \
+                    --environment Variables="{NODE_ENV=$NODE_ENV,USE_SSM_PARAMETERS=$USE_SSM_PARAMETERS}" \
+                    --timeout 30 \
+                    --memory-size 512 \
+                    --region $AWS_DEFAULT_REGION
+                - echo "=== Lambda Container Image deployment completed successfully ==="
+          artifacts:
+            files:
+              - '**/*'
+      VpcConfig:
+        VpcId:
+          Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
+        Subnets:
+          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPCEndpointSecurityGroup-ID
+      TimeoutInMinutes: 20
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-build-${Environment}
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: codebuild-automation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # Lambda Function for triggering builds
+  BuildTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-build-trigger-${Environment}
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt BuildTriggerRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          codebuild = boto3.client('codebuild')
+
+          def lambda_handler(event, context):
+              try:
+                  project_name = event.get('project_name')
+                  if not project_name:
+                      raise ValueError("project_name is required")
+                  
+                  logger.info(f"Starting Lambda Container Image build for project: {project_name}")
+                  
+                  response = codebuild.start_build(projectName=project_name)
+                  build_id = response['build']['id']
+                  
+                  logger.info(f"Build started with ID: {build_id}")
+                  
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps({
+                          'message': 'Lambda Container Image build started successfully',
+                          'buildId': build_id,
+                          'projectName': project_name
+                      })
+                  }
+              except Exception as e:
+                  logger.error(f"Error starting build: {str(e)}")
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps({
+                          'message': 'Failed to start build',
+                          'error': str(e)
+                      })
+                  }
+      Environment:
+        Variables:
+          CODEBUILD_PROJECT_NAME: !Ref CodeBuildProject
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: codebuild-automation
+        - Key: Project
+          Value: fireblocks-callback-handler
+
+  # IAM Role for Build Trigger Function
+  BuildTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-build-trigger-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BuildTriggerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt CodeBuildProject.Arn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: codebuild-automation
+        - Key: Project
+          Value: fireblocks-callback-handler
+
+Outputs:
+  ECRRepositoryName:
+    Description: ECR Repository Name
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-Name
+
+  ECRRepositoryURI:
+    Description: ECR Repository URI
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-ECRRepository-URI
+
+  CodeBuildProjectName:
+    Description: CodeBuild Project Name
+    Value: !Ref CodeBuildProject
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CodeBuildProject-Name
+
+  BuildArtifactsBucketName:
+    Description: S3 Bucket for Build Artifacts
+    Value: !Ref BuildArtifactsBucket
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-BuildArtifacts-Bucket
+
+  BuildTriggerFunctionArn:
+    Description: Lambda Function ARN for triggering builds
+    Value: !GetAtt BuildTriggerFunction.Arn
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-BuildTrigger-FunctionArn
+
+  BuildCommand:
+    Description: AWS CLI command to trigger build manually
+    Value: !Sub |
+      aws codebuild start-build --project-name ${CodeBuildProject} --region ${AWS::Region}
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-Build-Command
+
+  LambdaDeploymentInfo:
+    Description: Lambda Container Image deployment information
+    Value: !Sub |
+      Handler: app.handler
+      Function: ${ProjectName}-callback-${Environment}
+      Environment Variables: NODE_ENV=production, USE_SSM_PARAMETERS=true
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-Lambda-DeploymentInfo

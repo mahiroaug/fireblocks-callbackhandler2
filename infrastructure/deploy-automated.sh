@@ -121,10 +121,9 @@ print_status "$BLUE" "Profile: $PROFILE, Region: $REGION, Environment: $ENVIRONM
 
 FOUNDATION_STACK="${PROJECT_NAME}-01-foundation-${ENVIRONMENT}"
 SECURITY_STACK="${PROJECT_NAME}-02-security-${ENVIRONMENT}"
-DNS_STACK="${PROJECT_NAME}-03-dns-${ENVIRONMENT}"
-CODEBUILD_STACK="${PROJECT_NAME}-04-codebuild-${ENVIRONMENT}"
-CALLBACK_HANDLER_STACK="${PROJECT_NAME}-05-callback-handler-${ENVIRONMENT}"
-COSIGNER_STACK="${PROJECT_NAME}-06-cosigner-${ENVIRONMENT}"
+CODEBUILD_STACK="${PROJECT_NAME}-03-codebuild-${ENVIRONMENT}"
+CALLBACK_HANDLER_STACK="${PROJECT_NAME}-04-callback-handler-${ENVIRONMENT}"
+COSIGNER_STACK="${PROJECT_NAME}-05-cosigner-${ENVIRONMENT}"
 
 # Get AWS Account ID
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --profile "$PROFILE" --no-paginate)
@@ -197,10 +196,9 @@ show_all_stacks_status() {
 
     show_stack_status "$FOUNDATION_STACK" "1️⃣ Foundation (VPC, Subnets)"
     show_stack_status "$SECURITY_STACK" "2️⃣ Security (IAM, Security Groups)"
-    show_stack_status "$DNS_STACK" "3️⃣ DNS (Private Hosted Zone)"
-    show_stack_status "$CODEBUILD_STACK" "4️⃣ CodeBuild + ECR"
-    show_stack_status "$CALLBACK_HANDLER_STACK" "5️⃣ Callback Handler (ALB, ECS)"
-    show_stack_status "$COSIGNER_STACK" "6️⃣ Cosigner (EC2, Nitro Enclave)"
+    show_stack_status "$CODEBUILD_STACK" "3️⃣ CodeBuild + ECR"
+    show_stack_status "$CALLBACK_HANDLER_STACK" "4️⃣ Callback Handler (Lambda, API Gateway)"
+    show_stack_status "$COSIGNER_STACK" "5️⃣ Cosigner (EC2, Nitro Enclave)"
     
     print_status "$BLUE" "================================================="
 }
@@ -426,20 +424,6 @@ main() {
         return 1
     fi
     
-    # Check if SSL Certificate ARN is set
-    if [ -f "infrastructure/parameters/${ENVIRONMENT}/security.json" ]; then
-        ssl_cert_arn=$(jq -r '.[] | select(.ParameterKey=="SSLCertificateArn") | .ParameterValue' "infrastructure/parameters/${ENVIRONMENT}/security.json")
-        if [ "$ssl_cert_arn" == "PLACEHOLDER_SSL_CERTIFICATE_ARN" ]; then
-            print_status "$RED" "❌ SSL Certificate ARN is still placeholder!"
-            print_status "$RED" "    Please complete the SSL certificate setup:"
-            print_status "$RED" "    1. Generate SSL certificates"
-            print_status "$RED" "    2. Import to AWS Certificate Manager"
-            print_status "$RED" "    3. Update SSLCertificateArn in infrastructure/parameters/${ENVIRONMENT}/security.json"
-            return 1
-        fi
-        print_status "$GREEN" "✅ SSL Certificate ARN configured: $ssl_cert_arn"
-    fi
-    
     print_status "$GREEN" "✅ Parameter files found in infrastructure/parameters/${ENVIRONMENT}/"
     
     # Step 1a: Register JWT certificates to SSM Parameter Store
@@ -451,13 +435,7 @@ main() {
     
     # Initialize variables for cross-stack references
     local started=false
-    local SSL_CERT_ARN=""
     local ECR_REPO_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${PROJECT_NAME}"
-    
-    # Step 2: SSL Certificate ARN is handled in parameters files
-    print_status "$BLUE" "🔒 Step 2: SSL Certificate ARN will be taken from parameters file"
-    print_status "$YELLOW" "⚠️  Make sure you have imported your SSL certificate to ACM first"
-    print_status "$YELLOW" "   and updated the SSLCertificateArn parameter in the security stack parameters"
     
     # Step 2: Deploy Foundation Stack
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "foundation" ]; then
@@ -493,23 +471,6 @@ main() {
         print_status "$YELLOW" "⏭️ Skipping Security stack (explicitly skipped)"
     fi
     
-    # Step 4: Deploy DNS Stack
-    if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "dns" ]; then
-        started=true
-    fi
-    
-    if [ "$started" == "true" ] && ! should_skip_stack "dns"; then
-        print_status "$BLUE" "🌐 Step 4: Deploying DNS stack..."
-        if ! deploy_stack "$DNS_STACK" "infrastructure/stacks/03-dns.yaml" "infrastructure/parameters/${ENVIRONMENT}/dns.json" "DNS (Private Hosted Zone)"; then
-            print_status "$RED" "❌ DNS deployment failed. Stopping."
-            return 1
-        fi
-    elif [ "$started" == "false" ]; then
-        print_status "$YELLOW" "⏭️ Skipping DNS stack (before start point)"
-    else
-        print_status "$YELLOW" "⏭️ Skipping DNS stack (explicitly skipped)"
-    fi
-    
     # Step 5: Deploy CodeBuild Stack (with integrated ECR)
     if [ -z "$FROM_STACK" ] || [ "$FROM_STACK" == "codebuild" ]; then
         started=true
@@ -531,7 +492,7 @@ main() {
             return 1
         fi
         
-        if deploy_stack "$CODEBUILD_STACK" "infrastructure/stacks/04-codebuild-automation.yaml" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" "CodeBuild + ECR"; then
+        if deploy_stack "$CODEBUILD_STACK" "infrastructure/stacks/03-codebuild-automation.yaml" "infrastructure/parameters/${ENVIRONMENT}/codebuild.json" "CodeBuild + ECR"; then
             print_status "$GREEN" "ECR Repository URI: $ECR_REPO_URI"
 
             # -------------------------------------------
@@ -583,7 +544,7 @@ main() {
     fi
     
     if [ "$started" == "true" ] && ! should_skip_stack "callback"; then
-        print_status "$BLUE" "🐳 Step 6: Deploying callback handler stack..."
+        print_status "$BLUE" "🐳 Step 4: Deploying callback handler stack..."
         
         # Update (overwrite) ContainerImage in callback-handler.json every time
         if [ -f "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" ]; then
@@ -598,7 +559,7 @@ main() {
             return 1
         fi
         
-        if ! deploy_stack "$CALLBACK_HANDLER_STACK" "infrastructure/stacks/05-callback-handler.yaml" "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" "Callback Handler (ALB, ECS)"; then
+        if ! deploy_stack "$CALLBACK_HANDLER_STACK" "infrastructure/stacks/04-lambda-callback.yaml" "infrastructure/parameters/${ENVIRONMENT}/callback-handler.json" "Callback Handler (Lambda, API Gateway)"; then
             print_status "$RED" "❌ Callback Handler deployment failed. Stopping."
             return 1
         fi
@@ -614,7 +575,7 @@ main() {
     fi
     
     if [ "$started" == "true" ] && ! should_skip_stack "cosigner"; then
-        print_status "$BLUE" "👤 Step 7: Deploying cosigner stack (optional)..."
+        print_status "$BLUE" "👤 Step 5: Deploying cosigner stack (optional)..."
         
         # Check if cosigner parameter file exists
         if [ ! -f "infrastructure/parameters/${ENVIRONMENT}/cosigner.json" ]; then
@@ -623,7 +584,7 @@ main() {
             return 1
         fi
         
-        if ! deploy_stack "$COSIGNER_STACK" "infrastructure/stacks/06-cosigner.yaml" "infrastructure/parameters/${ENVIRONMENT}/cosigner.json" "Cosigner (EC2, Nitro Enclave)"; then
+        if ! deploy_stack "$COSIGNER_STACK" "infrastructure/stacks/05-cosigner.yaml" "infrastructure/parameters/${ENVIRONMENT}/cosigner.json" "Cosigner (EC2, Nitro Enclave)"; then
             print_status "$RED" "❌ Cosigner deployment failed. Stopping."
             return 1
         fi
@@ -645,17 +606,12 @@ main() {
 
     print_status "$GREEN" "  1️⃣ Foundation Stack: $FOUNDATION_STACK"
     print_status "$GREEN" "  2️⃣ Security Stack: $SECURITY_STACK"
-    print_status "$GREEN" "  3️⃣ DNS Stack: $DNS_STACK"
-    print_status "$GREEN" "  4️⃣ CodeBuild + ECR: $CODEBUILD_STACK"
-    print_status "$GREEN" "  5️⃣ Callback Handler: $CALLBACK_HANDLER_STACK"
-    print_status "$GREEN" "  6️⃣ Cosigner: $COSIGNER_STACK"
+    print_status "$GREEN" "  3️⃣ CodeBuild + ECR: $CODEBUILD_STACK"
+    print_status "$GREEN" "  4️⃣ Callback Handler: $CALLBACK_HANDLER_STACK"
+    print_status "$GREEN" "  5️⃣ Cosigner: $COSIGNER_STACK"
     
     print_status "$BLUE" "================================================="
     print_status "$BLUE" "📦 Container Image: $ECR_REPO_URI:latest"
-    print_status "$BLUE" "🔒 SSL Certificate: callback-handler.internal"
-    if [ -n "$SSL_CERT_ARN" ]; then
-        print_status "$BLUE" "🔒 SSL Certificate ARN: $SSL_CERT_ARN"
-    fi
     
     if [ "$DRY_RUN" != "true" ]; then
         print_status "$YELLOW" "🔗 Next steps:"
