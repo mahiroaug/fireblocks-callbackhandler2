@@ -688,7 +688,7 @@ main() {
             print_status "$RED" "❌ Parameter file not found: $cosigner_params_file"
             return 1
         fi
-
+        
         # Check if cosigner parameter file exists
         if [ ! -f "infrastructure/parameters/${ENVIRONMENT}/cosigner.json" ]; then
             print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/cosigner.json"

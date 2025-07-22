@@ -262,7 +262,7 @@ exports.handler = async (event, context) => {
       if (event.httpMethod === 'GET' && (event.path === '/health' || event.path === '/')) {
         // ヘルスチェックレスポンス
         const healthStatus = generateHealthStatus(context);
-        
+  
         logInfo("Health check completed", {
           status: 'healthy',
           awsRequestId: context.awsRequestId
@@ -314,7 +314,7 @@ exports.handler = async (event, context) => {
     
     // JWT処理の実行
     const result = await processTxSignRequest(jwtToken, requestId);
-    
+
     // Lambda Response形式で返却
     const response = {
       statusCode: result.statusCode,

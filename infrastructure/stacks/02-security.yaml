@@ -22,12 +22,10 @@ Resources:
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
       SecurityGroupEgress:
-        # Fireblocks SaaS API通信（NAT Gateway経由）
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
+        # All Traffic Outbound
+        - IpProtocol: -1
           CidrIp: 0.0.0.0/0
-          Description: "HTTPS to Fireblocks SaaS API"
+          Description: "All traffic outbound"
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-cosigner-sg-${Environment}

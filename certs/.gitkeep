@@ -2,7 +2,7 @@
 
 # JWT用証明書ファイル（openssl コマンドで作成）:
 # - callback_private.pem  (openssl genrsa で作成)
-# - callback_public.pem   (openssl rsa で作成)  
+# - callback_public.pem   (openssl rsa で作成)
 # - cosigner_public.pem   (Fireblocks Cosignerから取得)
 
 # 注意：
