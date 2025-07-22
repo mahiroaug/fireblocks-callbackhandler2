@@ -163,6 +163,10 @@ cat > "$env_dir/cosigner.json" << EOF
         "ParameterValue": "c5.xlarge"
     },
     {
+        "ParameterKey": "EbsVolumeSize",
+        "ParameterValue": 30
+    },
+    {
         "ParameterKey": "KeyPairName",
         "ParameterValue": "PLACEHOLDER_KEY_PAIR_NAME"
     }

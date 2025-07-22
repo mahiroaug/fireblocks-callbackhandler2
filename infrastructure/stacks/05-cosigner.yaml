@@ -19,6 +19,11 @@ Parameters:
     AllowedValues: [c5.large, c5.xlarge, c5.2xlarge, c5.4xlarge]
     Description: EC2 instance type for Cosigner (Nitro Enclave compatible)
 
+  EbsVolumeSize:
+    Type: Number
+    Default: 30
+    Description: Root EBS volume size in GB for Cosigner instance
+
   KeyPairName:
     Type: String
     Description: EC2 Key Pair name for emergency access
@@ -71,6 +76,12 @@ Resources:
     Properties:
       InstanceType: !Ref InstanceType
       ImageId: ami-03598bf9d15814511 # Amazon Linux 2023 (ap-northeast-1)
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref EbsVolumeSize
+            VolumeType: gp3
+            Encrypted: true
       SubnetId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
       SecurityGroupIds:
