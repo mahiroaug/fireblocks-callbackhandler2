@@ -7,7 +7,7 @@ Parameters:
     Description: Project name for resource naming
   Environment:
     Type: String
-    AllowedValues: [dev, stg, prod]
+    AllowedValues: [dev, stg, prod, cm]
     Description: Environment name
   ContainerImage:
     Type: String

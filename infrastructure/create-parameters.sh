@@ -164,7 +164,7 @@ cat > "$env_dir/cosigner.json" << EOF
     },
     {
         "ParameterKey": "EbsVolumeSize",
-        "ParameterValue": 30
+        "ParameterValue": "30"
     },
     {
         "ParameterKey": "KeyPairName",

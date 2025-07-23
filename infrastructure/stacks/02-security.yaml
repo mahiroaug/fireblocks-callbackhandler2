@@ -10,7 +10,7 @@ Parameters:
   Environment:
     Type: String
     Default: dev
-    AllowedValues: [dev, stg, prod]
+    AllowedValues: [dev, stg, prod, cm]
     Description: Environment name
 
 Resources:

@@ -15,10 +15,15 @@ phases:
       - "echo '=== Building Lambda Container Image ==='"
       - "cd app"
       - "echo 'Current directory $(pwd)'"
+      - "ls -la"
       - "echo 'Building Docker image for Lambda'"
-      - "docker build -t e2e-monitor-cbh:latest ."
+      - "docker build -t e2e-monitor-cbh:latest . || { echo 'Docker build failed'; exit 1; }"
+      - "echo 'Docker build completed successfully'"
+      - "docker images | grep e2e-monitor-cbh"
       - "echo 'Tagging image for ECR'"
-      - "docker tag e2e-monitor-cbh:latest $ECR_REPOSITORY_URI:latest"
+      - "docker tag e2e-monitor-cbh:latest $ECR_REPOSITORY_URI:latest || { echo 'Docker tag failed'; exit 1; }"
+      - "echo 'Docker tag completed successfully'"
+      - "docker images | grep $ECR_REPOSITORY_URI"
       - "echo 'Image build completed'"
   post_build:
     commands:
