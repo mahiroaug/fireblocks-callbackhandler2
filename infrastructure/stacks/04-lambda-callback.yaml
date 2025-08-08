@@ -71,7 +71,7 @@ Resources:
             Resource: "*"
             Condition:
               StringEquals:
-                aws:PrincipalVpc:
+                aws:SourceVpc:
                   Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
 
   ApiResourceCallback:
