@@ -242,6 +242,9 @@ cd ..
 # 途中で失敗した場合の再実行（codebuildスタックから）
 ./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack codebuild
 
+# 特定のスタックのみ実行（例：Lambda）
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks lambda
+
 # 特定のスタックをスキップ（例：Cosigner）
 ./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner
 
@@ -287,7 +290,18 @@ cd ..
 # - cosigner: Cosigner EC2
 ```
 
-#### 3. 特定スタックのスキップ
+#### 3. 特定スタックのみ実行
+```bash
+# 単一スタックのみ実行
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks lambda
+
+# 複数スタックのみ実行（カンマ区切り）
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks security,lambda
+
+# 利用可能なスタック名: foundation, security, codebuild, lambda, cosigner
+```
+
+#### 4. 特定スタックのスキップ
 ```bash
 # 単一スタックをスキップ
 ./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner
@@ -296,13 +310,13 @@ cd ..
 ./infrastructure/deploy-automated.sh -p <aws_profile> --skip-stacks cosigner,codebuild
 ```
 
-#### 4. ドライランモード
+#### 5. ドライランモード
 ```bash
 # 実際にデプロイせずに実行内容を確認
 ./infrastructure/deploy-automated.sh -p <aws_profile> --dry-run
 ```
 
-#### 5. 環境別・地域別デプロイメント
+#### 6. 環境別・地域別デプロイメント
 ```bash
 # 開発環境（デフォルト）
 ./infrastructure/deploy-automated.sh -p dev_profile

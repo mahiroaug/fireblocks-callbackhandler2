@@ -30,7 +30,7 @@ Resources:
       Code:
         ImageUri: !Ref ContainerImage
       MemorySize: 1024
-      Timeout: 30
+      Timeout: 300
       Role:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-LambdaExecutionRole-ARN
       VpcConfig:
@@ -42,9 +42,15 @@ Resources:
         Variables:
           NODE_ENV: !Ref Environment
           USE_SSM_PARAMETERS: "true"
+          CALLBACK_PRIVATE_KEY_PARAMETER: !Sub "/${ProjectName}/${Environment}/jwt/callback-private-key"
+          COSIGNER_PUBLIC_KEY_PARAMETER: !Sub "/${ProjectName}/${Environment}/jwt/cosigner-public-key"
+          LOG_LEVEL: "DEBUG"
+          ALLOW_ZERO_SIGNATURE: "true"
+          FULL_JWT_LOGGING: "true"
+          APPROVAL_DELAY_MS: "500"
       ImageConfig:
         Command: ["app.handler"]
-      Architectures: [arm64]
+      Architectures: [x86_64]
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -71,7 +77,7 @@ Resources:
             Resource: "*"
             Condition:
               StringEquals:
-                aws:PrincipalVpc:
+                aws:SourceVpc:
                   Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
 
   ApiResourceCallback:
@@ -81,6 +87,20 @@ Resources:
       ParentId: !GetAtt PrivateRestApi.RootResourceId
       PathPart: callback
 
+  ApiResourceV2:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ParentId: !Ref ApiResourceCallback
+      PathPart: v2
+
+  ApiResourceTxSignRequest:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ParentId: !Ref ApiResourceV2
+      PathPart: tx_sign_request
+
   ApiResourceHealth:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -88,11 +108,11 @@ Resources:
       ParentId: !GetAtt PrivateRestApi.RootResourceId
       PathPart: health
 
-  CallbackPostMethod:
+  TxSignRequestPostMethod:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref PrivateRestApi
-      ResourceId: !Ref ApiResourceCallback
+      ResourceId: !Ref ApiResourceTxSignRequest
       HttpMethod: POST
       AuthorizationType: NONE
       Integration:
@@ -112,14 +132,14 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CallbackLambda.Arn}/invocations"
 
-  # Permission for API Gateway to invoke Lambda for POST /callback
-  CallbackPostPermission:
+  # Permission for API Gateway to invoke Lambda for POST /callback/v2/tx_sign_request
+  TxSignRequestPostPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt CallbackLambda.Arn
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/prod/POST/callback"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/prod/POST/callback/v2/tx_sign_request"
 
   # Permission for API Gateway to invoke Lambda for GET /health
   HealthGetPermission:
@@ -136,9 +156,9 @@ Resources:
       RestApiId: !Ref PrivateRestApi
       StageName: prod
     DependsOn:
-      - CallbackPostMethod
+      - TxSignRequestPostMethod
       - HealthGetMethod
-      - CallbackPostPermission
+      - TxSignRequestPostPermission
       - HealthGetPermission
 
 Outputs:

@@ -637,19 +637,38 @@ main() {
     if [ "$started" == "true" ] && ! should_skip_stack "lambda"; then
         print_status "$BLUE" "🐳 Step 4: Deploying Lambda callback stack..."
         
-        # Update (overwrite) ContainerImage in lambda-callback.json every time
-        if [ -f "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" ]; then
-            tmp_cb=$(mktemp)
-            jq --arg img "${ECR_REPO_URI}:latest" 'map(if .ParameterKey=="ContainerImage" then .ParameterValue=$img else . end)' \
-              "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" > "$tmp_cb" && \
-              mv "$tmp_cb" "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
-            print_status "$GREEN" "✅ Set ContainerImage to ${ECR_REPO_URI}:latest in lambda-callback.json"
+        # Ensure ECR_REPO_URI is available. If empty (e.g., when skipping CodeBuild), try to fetch from existing stack
+        if [ -z "$ECR_REPO_URI" ]; then
+            if stack_exists "$CODEBUILD_STACK"; then
+                ECR_REPO_URI=$(get_stack_output "$CODEBUILD_STACK" "ECRRepositoryURI")
+                if [ -n "$ECR_REPO_URI" ]; then
+                    print_status "$GREEN" "✅ Fetched ECR Repository URI from existing stack: $ECR_REPO_URI"
+                else
+                    print_status "$YELLOW" "⚠️ Could not fetch ECR Repository URI from existing CodeBuild stack outputs"
+                fi
+            fi
+        fi
+
+        # Update (overwrite) ContainerImage only if ECR_REPO_URI is non-empty (trimmed)
+        ECR_REPO_URI_TRIMMED="${ECR_REPO_URI//[[:space:]]/}"
+        if [ -n "$ECR_REPO_URI_TRIMMED" ]; then
+            if [ -f "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" ]; then
+                tmp_cb=$(mktemp)
+                jq --arg img "${ECR_REPO_URI_TRIMMED}:latest" 'map(if .ParameterKey=="ContainerImage" then .ParameterValue=$img else . end)' \
+                  "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" > "$tmp_cb" && \
+                  mv "$tmp_cb" "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
+                print_status "$GREEN" "✅ Set ContainerImage to ${ECR_REPO_URI_TRIMMED}:latest in lambda-callback.json"
+            else
+                print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
+                print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"
+                return 1
+            fi
         else
-            print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
-            print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"
-            return 1
+            print_status "$YELLOW" "⚠️ ECR_REPO_URI is empty. Skipping ContainerImage overwrite and using existing value in parameters file."
         fi
         
+        # No forced API Gateway deployment version bump (simplified)
+
         if ! deploy_stack "$LAMBDA_CALLBACK_STACK" "infrastructure/stacks/04-lambda-callback.yaml" "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" "Lambda Callback (API Gateway + Lambda)"; then
             print_status "$RED" "❌ Lambda Callback deployment failed. Stopping."
             return 1

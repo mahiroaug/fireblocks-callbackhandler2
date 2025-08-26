@@ -123,6 +123,7 @@ Resources:
               # S3 for source code
               - Effect: Allow
                 Action:
+                  - s3:ListBucket
                   - s3:GetBucketLocation
                   - s3:GetObject
                   - s3:GetObjectVersion
