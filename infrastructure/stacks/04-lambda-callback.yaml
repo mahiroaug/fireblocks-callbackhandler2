@@ -44,9 +44,9 @@ Resources:
           USE_SSM_PARAMETERS: "true"
           CALLBACK_PRIVATE_KEY_PARAMETER: !Sub "/${ProjectName}/${Environment}/jwt/callback-private-key"
           COSIGNER_PUBLIC_KEY_PARAMETER: !Sub "/${ProjectName}/${Environment}/jwt/cosigner-public-key"
-          LOG_LEVEL: "DEBUG"
-          ALLOW_ZERO_SIGNATURE: "true"
-          FULL_JWT_LOGGING: "true"
+          LOG_LEVEL: "INFO"
+          ALLOW_ZERO_SIGNATURE: "false"
+          FULL_JWT_LOGGING: "false"
           APPROVAL_DELAY_MS: "500"
       ImageConfig:
         Command: ["app.handler"]
