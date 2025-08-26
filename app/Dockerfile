@@ -13,34 +13,21 @@
 #
 # @version 3.0.0 (Lambda専用)
 
-FROM node:22-alpine
+FROM public.ecr.aws/lambda/nodejs:22
 
-# 作業ディレクトリの設定
-WORKDIR /app
+# 作業ディレクトリ（Lambdaベースは /var/task）
+WORKDIR /var/task
 
-# package.jsonとpackage-lock.jsonのコピー（キャッシュ効率化）
+# package.jsonのコピー（キャッシュ効率化）
 COPY src/package*.json ./
 
-# 依存関係のインストール
-RUN npm install --only=production
-
-# 注意: aws-lambda-ric（Lambda Runtime Interface Emulator）は本番環境では不要
-# AWS Lambda Container Image環境ではAWSが提供するランタイムを使用
+# 本番依存のみインストール
+RUN npm install --omit=dev
 
 # アプリケーションソースコードのコピー
 COPY src/ ./
 
 # 証明書はSSM Parameter Storeから動的に取得されます
 
-# 非rootユーザーでの実行（セキュリティ向上）
-RUN addgroup -g 1001 -S nodejs \
-  && adduser -S nodejs -u 1001
-
-# アプリケーションファイルの権限設定
-RUN chown -R nodejs:nodejs /app
-
-# 非rootユーザーに切り替え
-USER nodejs
-
 # Lambda関数エントリポイント
-CMD ["app.handler"] 
+CMD ["app.handler"]

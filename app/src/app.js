@@ -89,8 +89,8 @@ function generateHealthStatus(context) {
  * @param {string} requestId - リクエストID
  * @returns {Object} 業務ロジック実行結果
  */
-function executeBusinessLogic(transactionData, requestId) {
-  logInfo("Executing business logic", {
+async function executeBusinessLogic(transactionData, requestId) {
+  logInfo("Executing business logic (delayed approval mode)", {
     txId: transactionData.txId,
     operation: transactionData.operation,
     sourceType: transactionData.sourceType,
@@ -98,27 +98,25 @@ function executeBusinessLogic(transactionData, requestId) {
     asset: transactionData.asset,
     amount: transactionData.amount
   }, requestId);
-  
-  // 現在は全てのリクエストを拒否
-  // 実際の運用では、以下のような条件を追加:
-  // - 金額制限チェック
-  // - 時間制限チェック
-  // - ホワイトリスト確認
-  // - 外部APIでの承認確認
-  
+
+  const start = Date.now();
+  const delayMs = Number(process.env.APPROVAL_DELAY_MS || 1000);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+
   const businessResult = {
-    action: "REJECT",  // APPROVE または REJECT
-    reason: "All transactions are rejected by default policy",
+    action: "APPROVE",
+    reason: "Approved after delayed review",
     timestamp: new Date().toISOString(),
-    processingTime: Date.now()
+    processingTime: Date.now() - start
   };
-  
+
   logInfo("Business logic completed", {
     action: businessResult.action,
     reason: businessResult.reason,
-    txId: transactionData.txId
+    txId: transactionData.txId,
+    waitedMs: delayMs
   }, requestId);
-  
+
   return businessResult;
 }
 
@@ -175,14 +173,15 @@ async function processTxSignRequest(jwtToken, requestId) {
     
     // 業務ロジック実行
     const txRequestId = decodedJWT.txId || decodedJWT.requestId;
-    const businessResult = executeBusinessLogic(decodedJWT, requestId);
+    const businessResult = await executeBusinessLogic(decodedJWT, requestId);
     
     // 応答JWT生成
     const responsePayload = {
       txId: txRequestId,
       action: businessResult.action,
       timestamp: new Date().toISOString(),
-      requestId: requestId
+      // CosignerからのrequestIdを必ずエコー（無い場合はtxId）
+      requestId: decodedJWT.requestId || txRequestId
     };
     
     logDebug("Generating response JWT", {
@@ -295,10 +294,31 @@ exports.handler = async (event, context) => {
     
     // リクエストボディの取得
     let jwtToken;
+    let rawTokenForLog;
     try {
       jwtToken = event.isBase64Encoded ? 
         Buffer.from(event.body, 'base64').toString() : 
         event.body;
+      rawTokenForLog = jwtToken;
+      // 入力の余分な空白や改行、両端の引用符を除去
+      if (typeof jwtToken === 'string') {
+        jwtToken = jwtToken.trim();
+        if (jwtToken.startsWith('"') && jwtToken.endsWith('"')) {
+          jwtToken = jwtToken.slice(1, -1).trim();
+        }
+        // フルダンプ要求がある場合はトークン全体を出力（検証目的のため）。
+        const fullDump = (process.env.FULL_JWT_LOGGING || 'false').toLowerCase() === 'true';
+        if (fullDump) {
+          logDebug('JWT token (raw)', { token: rawTokenForLog }, requestId);
+          logDebug('JWT token (normalized)', { token: jwtToken }, requestId);
+        }
+        // ログ強化: 先頭・末尾の数文字と長さを出力（通常時）
+        logDebug('JWT normalized', {
+          length: jwtToken.length,
+          prefix: jwtToken.substring(0, 16) + '...',
+          suffix: '...' + jwtToken.substring(Math.max(0, jwtToken.length - 16))
+        }, requestId);
+      }
     } catch (e) {
       logError("Failed to decode request body", e, {
         isBase64Encoded: event.isBase64Encoded,

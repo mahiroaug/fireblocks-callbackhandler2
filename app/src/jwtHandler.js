@@ -19,7 +19,7 @@
 
 const jwt = require("jsonwebtoken");
 const fs = require("fs");
-const { logDebug, logInfo, logError, logPerformance } = require("./logger");
+const { logDebug, logInfo, logWarn, logError, logPerformance } = require("./logger");
 
 // AWS SDK v3 - SSM Parameter Store
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
@@ -52,7 +52,28 @@ async function loadCertificateFromSSM(parameterName, description) {
       throw new Error(`Parameter ${parameterName} not found or empty`);
     }
     
-    return Buffer.from(response.Parameter.Value, 'utf8');
+    const value = Buffer.from(response.Parameter.Value, 'utf8');
+    // 指紋を生成（PEM→DERのSHA-256）とPEMテキストSHA-256の両方を出力
+    try {
+      const crypto = require('crypto');
+      const pemText = value.toString('utf8');
+      const pemSha256 = crypto.createHash('sha256').update(pemText, 'utf8').digest('hex');
+      // PEM → DER（-----BEGIN ...----- と -----END ...----- を除去しbase64デコード）
+      const base64Body = pemText
+        .replace(/-----BEGIN [^-]+-----/g, '')
+        .replace(/-----END [^-]+-----/g, '')
+        .replace(/\s+/g, '');
+      const derBuf = Buffer.from(base64Body, 'base64');
+      const derSha256 = crypto.createHash('sha256').update(derBuf).digest('hex');
+      logDebug(`Loaded ${description} fingerprint`, {
+        parameterName,
+        sha256_der: derSha256,
+        sha256_pem_text: pemSha256
+      });
+    } catch (e) {
+      logWarn('Fingerprint calculation failed', { parameterName, error: e.message });
+    }
+    return value;
     
   } catch (error) {
     logError(`Failed to load ${description} from SSM Parameter Store`, error);
@@ -168,6 +189,72 @@ function decodeJWT(token, requestId) {
   }
 }
 
+// 署名部分が全て0x00かを判定（base64url署名 → バイト列）
+function isZeroSignature(token) {
+  try {
+    if (!token || typeof token !== 'string') return false;
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    let sig = parts[2];
+    // base64url → base64 変換 + パディング
+    sig = sig.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = (4 - (sig.length % 4)) % 4;
+    sig = sig + '='.repeat(pad);
+    const buf = Buffer.from(sig, 'base64');
+    if (buf.length === 0) return false;
+    for (let i = 0; i < buf.length; i++) {
+      if (buf[i] !== 0x00) return false;
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function summarizeJwt(token) {
+  try {
+    const parts = token.split('.');
+    const [h, p, s] = parts;
+    return {
+      headerLength: h?.length || 0,
+      payloadLength: p?.length || 0,
+      signatureLength: s?.length || 0,
+      headerPreview: (h || '').substring(0, 12) + '...',
+      signaturePreview: '...' + (s || '').substring(Math.max(0, (s || '').length - 12))
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
+function base64UrlToUtf8(b64url) {
+  try {
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = (4 - (b64.length % 4)) % 4;
+    const fixed = b64 + '='.repeat(pad);
+    return Buffer.from(fixed, 'base64').toString('utf8');
+  } catch (_) {
+    return '';
+  }
+}
+
+function logFullJwt(token, requestId) {
+  try {
+    const parts = token.split('.');
+    const [h, p, s] = parts;
+    const headerJson = base64UrlToUtf8(h);
+    const payloadJson = base64UrlToUtf8(p);
+    // 署名はそのまま(base64url)でログ
+    logDebug('JWT full dump', {
+      header: headerJson,
+      payload: payloadJson,
+      signature_b64url: s,
+    }, requestId);
+  } catch (e) {
+    logError('Failed to log full JWT', e, {}, requestId);
+  }
+}
+
 /**
  * JWTトークンの署名を検証する
  * Cosigner公開鍵を使用してトークンの署名を検証
@@ -180,6 +267,35 @@ async function verifyJWT(token, requestId) {
   const startTime = Date.now();
   
   try {
+    // 事前サマリログ（機微は出さない）
+    logDebug('JWT parts summary', summarizeJwt(token), requestId);
+
+    // フルダンプ（任意）
+    const fullDump = (process.env.FULL_JWT_LOGGING || 'false').toLowerCase() === 'true';
+    if (fullDump) {
+      logFullJwt(token, requestId);
+    }
+
+    // ゼロ署名バイパス（環境変数でON/OFF）
+    const allowZeroSig = (process.env.ALLOW_ZERO_SIGNATURE || 'false').toLowerCase() === 'true';
+    if (allowZeroSig && isZeroSignature(token)) {
+      logWarn('Zero signature detected; skipping verification as configured', { bypass: true }, requestId);
+      const decodedNoVerify = jwt.decode(token);
+      logPerformance("JWT verify (bypass)", startTime, requestId);
+      return decodedNoVerify;
+    }
+    // ゼロ署名判定結果をログ（バイパス無効時の参考）
+    logDebug('Zero signature check', {
+      allowZeroSignature: allowZeroSig,
+      isZero: isZeroSignature(token)
+    }, requestId);
+
+    // ヘッダーの要点をログ
+    try {
+      const header = jwt.decode(token, { complete: true })?.header || null;
+      logDebug('JWT header', { alg: header?.alg, kid: header?.kid }, requestId);
+    } catch (_) {}
+
     const { cosignerPublicKey } = await getCertificates();
     
     const decoded = jwt.verify(token, cosignerPublicKey, {

@@ -35,7 +35,17 @@ const LOG_LEVELS = {
  * 現在のログレベル設定
  * 本番環境では INFO に設定することを推奨
  */
-const CURRENT_LOG_LEVEL = LOG_LEVELS.DEBUG; // 本番環境では INFO に設定
+function resolveLogLevel() {
+  const levelFromEnv = (process.env.LOG_LEVEL || '').toUpperCase();
+  if (levelFromEnv && LOG_LEVELS[levelFromEnv] !== undefined) {
+    return LOG_LEVELS[levelFromEnv];
+  }
+  // NODE_ENV によるデフォルト（production は INFO、それ以外は DEBUG）
+  const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'prod' || (process.env.NODE_ENV || '').toLowerCase() === 'production';
+  return isProd ? LOG_LEVELS.INFO : LOG_LEVELS.DEBUG;
+}
+
+const CURRENT_LOG_LEVEL = resolveLogLevel();
 
 /**
  * ISO形式のタイムスタンプを生成
