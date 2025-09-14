@@ -308,43 +308,26 @@ deploy_stack() {
     esac
 }
 
-# Function to register JWT certificates to SSM Parameter Store
-register_jwt_certificates() {
-    print_status "$BLUE" "🔑 Checking for JWT certificates..."
-    
+# (Removed) Automatic SSM registration of JWT certificates
+register_callback_private_key() {
+    print_status "$BLUE" "🔑 Checking callback private key..."
     local callback_private_key="certs/callback_private.pem"
-    local cosigner_public_key="certs/cosigner_public.pem"
-    
     local callback_param_name="/${PROJECT_NAME}/${ENVIRONMENT}/jwt/callback-private-key"
-    local cosigner_param_name="/${PROJECT_NAME}/${ENVIRONMENT}/jwt/cosigner-public-key"
-    
-    # Check if JWT certificate files exist
+
     if [ ! -f "$callback_private_key" ]; then
-        print_status "$RED" "❌ JWT certificate not found: $callback_private_key"
-        print_status "$RED" "Please generate JWT certificates first:"
+        print_status "$RED" "❌ JWT callback private key not found: $callback_private_key"
+        print_status "$RED" "Please generate it first:"
         print_status "$YELLOW" "  mkdir -p certs && cd certs"
         print_status "$YELLOW" "  openssl genrsa -out callback_private.pem 2048"
         print_status "$YELLOW" "  openssl rsa -in callback_private.pem -outform PEM -pubout -out callback_public.pem"
-        print_status "$YELLOW" "  # Place cosigner_public.pem from Fireblocks Cosigner"
         return 1
     fi
-    
-    if [ ! -f "$cosigner_public_key" ]; then
-        print_status "$RED" "❌ Cosigner public key not found: $cosigner_public_key"
-        print_status "$RED" "Please obtain cosigner_public.pem from Fireblocks Cosigner and place it in certs/"
-        return 1
-    fi
-    
-    print_status "$GREEN" "✅ JWT certificate files found"
-    
+
     if [ "$DRY_RUN" == "true" ]; then
-        print_status "$BLUE" "🔍 [DRY RUN] Would register JWT certificates to SSM Parameter Store:"
-        print_status "$BLUE" "    - $callback_param_name"
-        print_status "$BLUE" "    - $cosigner_param_name"
+        print_status "$BLUE" "🔍 [DRY RUN] Would register callback private key to SSM: $callback_param_name"
         return 0
     fi
-    
-    # Register callback private key
+
     print_status "$BLUE" "📦 Registering callback private key to SSM Parameter Store..."
     aws ssm put-parameter \
         --name "$callback_param_name" \
@@ -359,24 +342,6 @@ register_jwt_certificates() {
         return 1
     }
     print_status "$GREEN" "✅ Callback private key registered: $callback_param_name"
-    
-    # Register cosigner public key
-    print_status "$BLUE" "📦 Registering cosigner public key to SSM Parameter Store..."
-    aws ssm put-parameter \
-        --name "$cosigner_param_name" \
-        --description "JWT Cosigner Public Key" \
-        --value "file://$cosigner_public_key" \
-        --type "SecureString" \
-        --overwrite \
-        --region "$REGION" \
-        --profile "$PROFILE" \
-        --no-paginate || {
-        print_status "$RED" "❌ Failed to register cosigner public key"
-        return 1
-    }
-    print_status "$GREEN" "✅ Cosigner public key registered: $cosigner_param_name"
-    
-    print_status "$GREEN" "🎉 JWT certificates successfully registered to SSM Parameter Store"
 }
 
 # Function to setup SSH key for Cosigner
@@ -470,10 +435,9 @@ main() {
     
     print_status "$GREEN" "✅ Parameter files found in infrastructure/parameters/${ENVIRONMENT}/"
     
-    # Step 1a: Register JWT certificates to SSM Parameter Store
-    print_status "$BLUE" "📝 Step 1a: Registering JWT certificates to SSM Parameter Store..."
-    if ! register_jwt_certificates; then
-        print_status "$RED" "❌ JWT certificate registration failed. Please generate certificates first."
+    # Step 1a: Register only callback private key to SSM (Cosigner public key is manual later)
+    if ! register_callback_private_key; then
+        print_status "$RED" "❌ Callback private key SSM registration failed."
         return 1
     fi
     
@@ -750,8 +714,18 @@ main() {
         print_status "$YELLOW" "  2. 🔍 Check API Gateway Private REST API connectivity"
         print_status "$YELLOW" "  3. 🔗 Configure Cosigner with pairing token (see README section 5)"
         print_status "$YELLOW" "  4. 🔗 Test Lambda callback endpoint"
-        print_status "$GREEN" ""
-        print_status "$GREEN" "🎉 All certificates have been automatically registered to SSM Parameter Store!"
+        print_status "$YELLOW" "  5. 🔑 After Cosigner setup, register Cosigner public key to SSM (manual)"
+        print_status "$BLUE" ""
+        print_status "$BLUE" "📥 Manual SSM registration command (run after obtaining cosigner_public.pem):"
+        print_status "$BLUE" "  aws ssm put-parameter \\
+    --name \"/${PROJECT_NAME}/${ENVIRONMENT}/jwt/cosigner-public-key\" \\
+    --description \"JWT Cosigner Public Key\" \\
+    --value \"file://certs/cosigner_public.pem\" \\
+    --type \"SecureString\" \\
+    --overwrite \\
+    --region \"$REGION\" \\
+    --profile \"$PROFILE\" \\
+    --no-paginate"
     fi
 }
 

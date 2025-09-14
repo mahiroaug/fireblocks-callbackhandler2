@@ -190,11 +190,21 @@ fireblocks-callback-handler/
 code .
 # Command Palette → "Dev Containers: Reopen in Container"
 
+
 # 1. パラメータファイルを作成
+# common.json を編集
+vi infrastructure/parameters/common.json
+
+# ProjectName, Environment, Region を編集
+# ProjectName: プロジェクト名
+# Environment: 環境 (dev, staging, prod, cm)
+# Region: リージョン (ap-northeast-1)
+
+
 # 各スタックに必要なパラメータファイル群が自動生成されます
 ./infrastructure/create-parameters.sh
 
-# 2. JWT証明書を準備
+# 2. JWT証明書を準備（Cosigner公開鍵は後で）
 # certs/ ディレクトリを作成
 mkdir -p certs && cd certs
 
@@ -202,9 +212,8 @@ mkdir -p certs && cd certs
 openssl genrsa -out callback_private.pem 2048
 openssl rsa -in callback_private.pem -outform PEM -pubout -out callback_public.pem
 
-# Cosigner公開鍵を配置（Fireblocks Cosignerから取得）
-# Fireblocks Console または Cosignerから cosigner_public.pem を取得して配置
-#例: cp /path/to/cosigner_public.pem ./
+# Cosignerの公開鍵（cosigner_public.pem）は、全スタックのデプロイと
+# 「5. Cosignerの手動設定」完了後に取得できるため、この段階では不要です。
 
 cd ..
 ```
@@ -212,13 +221,12 @@ cd ..
 #### 自動デプロイメント
 
 ```bash
-# JWT証明書の自動SSM登録とインフラ全スタックのデプロイ
+# インフラ全スタックのデプロイ（callback鍵は自動登録・cosigner鍵は後で手動）
 ./infrastructure/deploy-automated.sh -p <aws_profile>
 ```
 
 **含まれる自動化**:
 - 📝 **事前のパラメータファイル作成**（`./infrastructure/create-parameters.sh`）
-- 🔑 JWT証明書の自動SSM Parameter Store登録
 - 🏗️ CloudFormationスタックの依存関係順デプロイ (4スタック)
 - 📦 ECRリポジトリの作成
 - 🔨 CodeBuildによるDockerイメージの自動ビルド・プッシュ
@@ -233,12 +241,102 @@ cd ..
 # 1. パラメータファイルを作成
 ./infrastructure/create-parameters.sh
 
-# 2. 基本的な実行
+# 2. フルデプロイ
 ./infrastructure/deploy-automated.sh -p <aws_profile>
+```
 
-# 本番環境での実行
-./infrastructure/deploy-automated.sh -p prod_profile -e prod
+#### EC2(cosigner)へのSSH over Session Manager設定例(windowsマシン) `~/.ssh/config`
 
+```
+Host AWS-e2e-monitor-cbh-cosigner-dev
+    ProxyCommand C:\Windows\System32\cmd.exe /c "aws ssm start-session --target %h --document-name AWS-StartSSHSession --profile <aws_profile>"
+    HostName i-xxxxxxxxxx
+    User ec2-user
+    IdentityFile C:\Users\<user_name>\.ssh\cosigner_ssh_key_dev.pem
+```
+
+aws_profileは、windowsマシンのaws cliの設定ファイル `C:\Users\<user_name>\.aws\config`(例) に設定されている必要がある。
+
+
+### 5. Cosignerの手動設定
+
+CosignerマシンにSSH接続し、以下の手順でCosignerソフトウェアをインストール
+
+```bash
+# Cosignerソフトウェアのインストール
+sudo yum update -y
+
+# Fireblocks提供のCosignerインストール手順に従う
+# wgetでスクリプトをダウンロード(URLはfireblocks cosignerセットアップコンソールから取得)
+
+wget -O nitro-cosigner.tar.gz "<cosigner_install_script_url>"
+tar -xzvf nitro-cosigner.tar.gz
+
+# スクリプトでCo-Signerインストール
+
+sudo ./install.sh
+
+- ペアリングトークンをコピペ
+
+  (fireblocks cosignerセットアップコンソールから取得)
+
+- S3 bucket nameを入力
+
+  例：e2e-monitor-cbh-cosigner-stg-123456789012
+
+- KMSのARNを入力
+
+  例：arn:aws:kms:ap-northeast-1:123456789012:key/xxxxxxxxx
+
+```
+
+callback handlerを設定する場合
+
+```bash
+
+- callback URLを入力
+
+　例：https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/callback
+
+- callback public keyを入力
+
+　(certs/callback_public.pemの内容をコピペ)
+
+
+```
+
+#### cosigner_public.pemを取得
+
+##### 1.Cosignerマシン
+
+```bash
+# cosigner_public.pemを出力
+sudo cosigner print-public-key
+```
+
+出力をメモして手元のcerts/cosigner_public.pemに保存
+
+##### 2.操作端末(this repository)
+
+SSM Parameter Storeへ手動登録
+
+```bash
+# Cosigner の公開鍵（Cosignerセットアップ後）
+aws ssm put-parameter \
+  --name "/e2e-monitor-cbh/<env>/jwt/cosigner-public-key" \
+  --description "JWT Cosigner Public Key" \
+  --value "file://certs/cosigner_public.pem" \
+  --type "SecureString" \
+  --overwrite \
+  --region ap-northeast-1 \
+  --profile <aws_profile>
+```
+
+
+
+# その他実行オプション
+
+```
 # 途中で失敗した場合の再実行（codebuildスタックから）
 ./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack codebuild
 
@@ -341,7 +439,7 @@ cd ..
    mkdir -p certs && cd certs
    openssl genrsa -out callback_private.pem 2048
    openssl rsa -in callback_private.pem -outform PEM -pubout -out callback_public.pem
-   # cosigner_public.pem を Fireblocks から取得して配置
+   # cosigner_public.pem は Cosignerセットアップ完了後に取得（この時点では不要）
    cd .. && ./infrastructure/deploy-automated.sh -p <aws_profile>
    ```
 
@@ -370,10 +468,10 @@ cd ..
 
 # JWT証明書ファイルの確認
 ls -la certs/
-# 以下のファイルが必要:
+# 以下のファイルが必要（段階により異なる）:
 # - callback_private.pem  (自動生成)
 # - callback_public.pem   (自動生成)
-# - cosigner_public.pem   (Fireblocks から取得)
+# - cosigner_public.pem   (Cosignerセットアップ完了後に取得)
 
 # SSM Parameter Store の確認
 aws ssm get-parameters \
@@ -390,22 +488,7 @@ aws ssm get-parameters \
 # 4. SSM Parameter Store での証明書確認
 ```
 
-### 5. Cosignerの手動設定
 
-インフラストラクチャのデプロイ完了後、Cosignerの設定を手動で実施：
-
-```bash
-# Cosignerインスタンスへのアクセス（Session Manager経由）
-# インスタンスIDは AWS Console または CLI で確認
-aws ssm start-session --target i-xxxxxxxxx --region ap-northeast-1
-
-# Cosignerソフトウェアのインストール
-sudo yum update -y
-# Fireblocks提供のCosignerインストール手順に従う
-
-# ペアリングトークンの設定
-# Fireblocks Console から取得したペアリングトークンを使用
-```
 
 ## 💰 コスト
 
@@ -485,7 +568,9 @@ sudo yum update -y
 
 ### 🔑 証明書管理
 
-- **JWT証明書**: ✅ **SSM 自動登録** (事前生成 → 自動SSM登録)
+- **JWT証明書**:
+  - `callback_private.pem` はデプロイスクリプトでSSMへ自動登録
+  - `cosigner_public.pem` はCosignerセットアップ完了後に手動登録
 
 ### 📖 参考資料
 
