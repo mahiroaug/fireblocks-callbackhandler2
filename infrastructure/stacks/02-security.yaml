@@ -21,11 +21,8 @@ Resources:
       GroupDescription: Security group for Cosigner (Nitro Enclave)
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      SecurityGroupEgress:
-        # All Traffic Outbound
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-          Description: "All traffic outbound"
+      # 最小権限の原則: Egressルールは個別のSecurityGroupEgressリソースで定義
+      # デフォルトの全許可ルールを削除するため、SecurityGroupEgressは空にする
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-cosigner-sg-${Environment}
@@ -64,6 +61,8 @@ Resources:
       GroupDescription: Security group for Lambda Callback Handler
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
+      # 最小権限の原則: Egressルールは個別のSecurityGroupEgressリソースで定義
+      # デフォルトの全許可ルールを削除するため、SecurityGroupEgressは空にする
       Tags:
         - Key: Name
           Value: !Sub ${ProjectName}-lambda-sg-${Environment}
@@ -87,6 +86,18 @@ Resources:
       ToPort: 443
       DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
       Description: "HTTPS to VPC Endpoints"
+
+  # Cosigner -> Fireblocks SaaS (api.fireblocks.io) via NAT Gateway
+  # 最小権限の原則: HTTPS (443) のみ許可
+  CosignerToFireblocksSaaSRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref CosignerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: "HTTPS to Fireblocks SaaS (api.fireblocks.io) via NAT Gateway"
 
   # Lambda -> VPC Endpoints
   LambdaToVPCEndpointsRule:
@@ -164,26 +175,15 @@ Resources:
             Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/aws/ec2/${ProjectName}-*"
 
   # SSM Messages Endpoint
+  # SSM Agent 3.3.40.0以降では、ssmmessagesエンドポイントのみでセッションマネージャーが動作します
+  # ec2messagesエンドポイントは不要のため削除（コスト削減にもつながります）
+  # 参考: https://dev.classmethod.jp/articles/vpcendpoint-ec2messages-not-required/
   SSMMessagesEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId:
         Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
       ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
-      VpcEndpointType: Interface
-      SubnetIds:
-        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
-      SecurityGroupIds:
-        - !Ref VPCEndpointSecurityGroup
-      PrivateDnsEnabled: true
-
-  # EC2 Messages Endpoint
-  EC2MessagesEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId:
-        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
       VpcEndpointType: Interface
       SubnetIds:
         - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID

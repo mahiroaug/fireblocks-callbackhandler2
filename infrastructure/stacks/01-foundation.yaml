@@ -200,6 +200,125 @@ Resources:
       SubnetId: !Ref PrivateSubnet
       RouteTableId: !Ref PrivateRouteTable
 
+  # デフォルトセキュリティグループのルール削除用Lambda実行ロール
+  DefaultSecurityGroupCleanupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EC2SecurityGroupPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeSecurityGroups
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                Resource: "*"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: foundation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # デフォルトセキュリティグループのルール削除用Lambda関数
+  DefaultSecurityGroupCleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-default-sg-cleanup-${Environment}
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt DefaultSecurityGroupCleanupRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              ec2 = boto3.client('ec2')
+              vpc_id = event['ResourceProperties']['VpcId']
+              
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  # VPCのデフォルトセキュリティグループを取得
+                  response = ec2.describe_security_groups(
+                      Filters=[
+                          {'Name': 'vpc-id', 'Values': [vpc_id]},
+                          {'Name': 'group-name', 'Values': ['default']}
+                      ]
+                  )
+                  
+                  if not response['SecurityGroups']:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  sg_id = response['SecurityGroups'][0]['GroupId']
+                  
+                  # Ingressルールを削除（監査対応: デフォルトセキュリティグループのルール削除）
+                  ingress_rules = response['SecurityGroups'][0].get('IpPermissions', [])
+                  if ingress_rules:
+                      try:
+                          ec2.revoke_security_group_ingress(
+                              GroupId=sg_id,
+                              IpPermissions=ingress_rules
+                          )
+                      except Exception as e:
+                          print(f"Warning: Failed to revoke ingress rules: {str(e)}")
+                  
+                  # Egressルールを削除（監査対応: デフォルトセキュリティグループのルール削除）
+                  # 注意: デフォルトセキュリティグループが使用されていない場合のみ安全に削除可能
+                  egress_rules = response['SecurityGroups'][0].get('IpPermissionsEgress', [])
+                  if egress_rules:
+                      try:
+                          ec2.revoke_security_group_egress(
+                              GroupId=sg_id,
+                              IpPermissions=egress_rules
+                          )
+                      except Exception as e:
+                          print(f"Warning: Failed to revoke egress rules: {str(e)}")
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'SecurityGroupId': sg_id
+                  })
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {})
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: foundation
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # デフォルトセキュリティグループのルール削除（Custom Resource）
+  # 監査対応: デフォルトセキュリティグループのルールは削除しておくことを推奨
+  DefaultSecurityGroupCleanup:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: PrivateSubnetRouteTableAssociation
+    Properties:
+      ServiceToken: !GetAtt DefaultSecurityGroupCleanupFunction.Arn
+      VpcId: !Ref VPC
+
 Outputs:
   VPCId:
     Description: VPC ID

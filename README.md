@@ -334,6 +334,39 @@ aws ssm put-parameter \
 
 
 
+#### Cosignerログローテーション設定の変更（インストール後）
+
+Cosigner インストール後に、ログのローテーションポリシー（世代数や保持期間など）を変更したい場合は、`logrotate` の設定ファイルを編集します。
+
+```bash
+# root 権限で customer_cosigner の logrotate 設定を編集
+sudo vi /etc/logrotate.d/customer_cosigner
+```
+
+例えば、ローテーション世代数を 10 → 100 に増やしたい場合は、以下のように `rotate` の値を変更します。
+
+```diff
+-    size 10M
+-    rotate 10
++    size 10M
++    rotate 100
+```
+
+必要に応じて、最大保持日数 (`maxage`) なども同じファイルに追記できます。
+
+```bash
+maxage 365
+```
+
+設定内容を反映する前に、Dry-Run で内容を確認したい場合は以下を実行します（任意）。
+
+```bash
+sudo logrotate -d /etc/logrotate.conf
+```
+
+これで、Cosigner ログのローテーション設定は `/etc/logrotate.d/customer_cosigner` を編集するだけで変更できます。
+
+
 # その他実行オプション
 
 ```
