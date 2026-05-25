@@ -16,33 +16,34 @@
 
 ### 2. Security Stack (02-security.yaml)
 **目的**: セキュリティ設定の一元管理
-- セキュリティグループ（Cosigner, ALB, ECS, VPC Endpoints）
-- IAMロール（Cosigner, ECS Task Execution, ECS Task）
-- VPCエンドポイント（S3, SSM, ECR, CloudWatch Logs）
+- セキュリティグループ（Cosigner, Lambda, VPC Endpoints）
+- IAMロール（Cosigner, Lambda Execution）
+- KMS Customer Managed Key（Fireblocks SaaS環境別のPCR8 attestation設定）
+- VPCエンドポイント（S3, SSM, KMS, API Gateway, ECR, CloudWatch Logs）
 
 **依存関係**: Foundation Stack
 
-### 3. DNS Stack (03-dns.yaml)
-**目的**: Private Hosted Zone管理
-- Private Hosted Zone（callback-handler.internal）
-- DNS設定
+### 3. CodeBuild + ECR Stack (03-codebuild-automation.yaml)
+**目的**: Lambdaコンテナイメージのビルド基盤
+- ECRリポジトリ
+- CodeBuildプロジェクト
+- ソースコードアップロード用S3
 
-**依存関係**: Foundation Stack
+**依存関係**: Foundation Stack, Security Stack
 
-### 4. Callback Handler Stack (04-callback-handler.yaml)
+### 4. Lambda Callback Stack (04-lambda-callback.yaml)
 **目的**: メインアプリケーションの提供
-- Application Load Balancer
-- ECS Cluster、Task Definition、Service
-- CloudWatch Logs、Alarms
-- DNS レコード
+- API Gateway Private REST API
+- Lambda関数（コンテナイメージ）
+- CloudWatch Logs
 
-**依存関係**: Foundation Stack, Security Stack, DNS Stack
+**依存関係**: Foundation Stack, Security Stack, CodeBuild + ECR Stack
 
 ### 5. Cosigner Stack (05-cosigner.yaml)
 **目的**: Fireblocks Cosignerの提供
-- EC2インスタンス（Nitro Enclave有効）
+- EC2インスタンス（Nitro Enclave有効、IMDSv2必須、Amazon Linux 2023）
+- Cosigner persistent storage用S3 bucketとbucket policy
 - CloudWatch監視設定
-- SSMパラメータ設定
 
 **依存関係**: Foundation Stack, Security Stack
 
@@ -54,17 +55,17 @@ e2e-monitor-cbh/
 │   ├── stacks/                           # CloudFormationテンプレート
 │   │   ├── 01-foundation.yaml           # 基盤スタック
 │   │   ├── 02-security.yaml             # セキュリティスタック
-│   │   ├── 03-dns.yaml                  # DNSスタック
-│   │   ├── 04-callback-handler.yaml     # コールバックハンドラースタック
+│   │   ├── 03-codebuild-automation.yaml # CodeBuild + ECRスタック
+│   │   ├── 04-lambda-callback.yaml      # Lambda Callbackスタック
 │   │   └── 05-cosigner.yaml             # Cosignerスタック
 │   ├── parameters/                       # パラメータファイル
 │   │   └── dev/                         # 環境別パラメータ
 │   │       ├── foundation.json
 │   │       ├── security.json
-│   │       ├── dns.json
-│   │       ├── callback-handler.json
+│   │       ├── codebuild.json
+│   │       ├── lambda-callback.json
 │   │       └── cosigner.json
-│   └── deploy-stacks.sh                 # 統合デプロイメントスクリプト
+│   └── deploy-automated.sh              # 統合デプロイメントスクリプト
 ├── app/                                 # アプリケーションコード
 └── README.md
 ```
@@ -81,47 +82,40 @@ e2e-monitor-cbh/
 2. **必要な権限**
    - CloudFormation: フルアクセス
    - EC2: フルアクセス
-   - ECS: フルアクセス
+   - Lambda: フルアクセス
+   - API Gateway: フルアクセス
+   - CodeBuild/ECR: フルアクセス
    - IAM: フルアクセス
-   - Route53: フルアクセス
    - VPC: フルアクセス
 
 ### 基本的なデプロイメント
 
 #### 1. 全スタックのデプロイ
 ```bash
-./infrastructure/deploy-stacks.sh deploy-all
+./infrastructure/deploy-automated.sh -p <aws_profile>
 ```
 
 #### 2. 環境指定でのデプロイ
 ```bash
-./infrastructure/deploy-stacks.sh deploy-all -e prod
+./infrastructure/deploy-automated.sh -p <aws_profile> -e prod
 ```
 
-#### 3. 個別スタックのデプロイ
+#### 3. 特定スタックのみのデプロイ
 ```bash
-./infrastructure/deploy-stacks.sh deploy-foundation
-./infrastructure/deploy-stacks.sh deploy-security
-./infrastructure/deploy-stacks.sh deploy-dns
-./infrastructure/deploy-stacks.sh deploy-callback
-./infrastructure/deploy-stacks.sh deploy-cosigner
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks security
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks cosigner
 ```
 
 ### スタック管理
 
 #### スタック状態の確認
 ```bash
-./infrastructure/deploy-stacks.sh status
+./infrastructure/deploy-automated.sh -p <aws_profile> --status
 ```
 
 #### パラメータファイルの生成
 ```bash
-./infrastructure/deploy-stacks.sh create-params
-```
-
-#### 全スタックの削除
-```bash
-./infrastructure/deploy-stacks.sh delete-all
+./infrastructure/create-parameters.sh
 ```
 
 ## ⚙️ 設定のカスタマイズ
@@ -132,7 +126,7 @@ e2e-monitor-cbh/
 
 ```bash
 # パラメータファイルの生成
-./infrastructure/deploy-stacks.sh create-params
+./infrastructure/create-parameters.sh
 
 # 必要に応じてパラメータを編集
 vi infrastructure/parameters/dev/cosigner.json
@@ -140,15 +134,27 @@ vi infrastructure/parameters/dev/cosigner.json
 
 ### 2. 必須パラメータの設定
 
-#### Cosignerスタック
+#### Securityスタック
 ```json
 {
-    "ParameterKey": "CosignerPairingToken",
-    "ParameterValue": "YOUR_PAIRING_TOKEN_HERE"
+    "ParameterKey": "FireblocksSaaSEnvironment",
+    "ParameterValue": "global"
+}
+```
+
+`FireblocksSaaSEnvironment` は `global`, `europe`, `swiss` のいずれかを指定します。この値により、KMS Key Policy の PCR8 attestation 値をFireblocks SaaS環境に合わせて切り替えます。
+
+#### Cosignerスタック
+`cosigner.json` で設定するのは EC2 起動に必要な値のみです。Pairing token とインストールパッケージURLは CloudFormation には保存せず、Fireblocks Consoleから取得して運用担当者がEC2上で `install.sh` 実行時に入力します。
+
+```json
+{
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "c5.xlarge"
 },
 {
-    "ParameterKey": "CosignerInstallationScript",
-    "ParameterValue": "https://your-installation-script-url"
+    "ParameterKey": "KeyPairName",
+    "ParameterValue": "YOUR_KEY_PAIR_NAME"
 }
 ```
 
@@ -188,24 +194,23 @@ export STACK_PREFIX="your-custom-prefix"
 
 各スタックには以下の監視機能が含まれています：
 
-1. **ECS監視**
-   - CPU使用率
-   - メモリ使用率
-   - タスク数
+1. **Lambda/API Gateway監視**
+   - Lambda実行ログ
+   - API Gatewayアクセスログ
+   - エラー率
 
-2. **EC2監視**
+2. **Cosigner EC2監視**
    - CPU使用率
-   - メモリ使用率
    - ステータスチェック
 
 ### ログ確認
 
 ```bash
-# ECSログの確認
-aws logs describe-log-groups --log-group-name-prefix "/aws/ecs/e2e-monitor-cbh"
+# Lambdaログの確認
+aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/e2e-monitor-cbh"
 
 # Cosignerログの確認
-aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/cosigner"
+aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/e2e-monitor-cbh"
 ```
 
 ## 🛡️ セキュリティ考慮事項
@@ -219,7 +224,7 @@ aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/cosigner"
 - VPCエンドポイント経由での暗号化通信
 
 ### 3. プライベートネットワーク
-- ECSとCosignerはプライベートサブネット内で実行
+- LambdaとCosignerはプライベートサブネット内で実行
 - 外部通信はNAT Gateway経由のみ
 
 ## 🔄 アップデート手順
@@ -227,34 +232,56 @@ aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/cosigner"
 ### 1. アプリケーションのアップデート
 ```bash
 # Callback Handlerのみを更新
-./infrastructure/deploy-stacks.sh deploy-callback
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks lambda
 ```
 
 ### 2. インフラストラクチャのアップデート
 ```bash
 # 特定のスタックのみを更新
-./infrastructure/deploy-stacks.sh deploy-security
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks security
 ```
 
 ### 3. 段階的アップデート
 ```bash
 # 依存関係を考慮した順序でアップデート
-./infrastructure/deploy-stacks.sh deploy-foundation
-./infrastructure/deploy-stacks.sh deploy-security
-./infrastructure/deploy-stacks.sh deploy-callback
+./infrastructure/deploy-automated.sh -p <aws_profile> --from-stack security
 ```
 
 ## 🚨 トラブルシューティング
+
+### 0. EC2アクセス権がない場合の受け渡し
+
+IaC担当はCloudFormation出力値と入力ルールを運用担当者へ渡し、EC2上の状態確認は運用担当者が実施します。
+
+IaC担当が渡す値:
+- S3 bucket name: `CosignerS3BucketName`（ARNではなくバケット名）
+- CMK ARN: `CosignerKMSKeyArn`
+- Callback URL: `04-lambda-callback` スタックのAPI Gateway URL
+- Callback public key: `certs/callback_public.pem`
+- Fireblocks SaaS環境: `global`, `europe`, `swiss`
+
+運用担当者がEC2上で確認するコマンド:
+```bash
+sudo ./fireblocks/cosigner get-status
+sudo ./fireblocks/cosigner logs
+sudo ./fireblocks/cosigner list-users
+```
+
+Fireblocks Console側の確認:
+- Pairing token はMainnetでは1時間以内に使用する
+- Installation package URL は有効期限内に使用する
+- API user が他のCo-signerと未ペアリングである
+- Workspace Owner がMPC key share承認通知を確認できる
 
 ### 1. スタック作成の失敗
 
 #### 依存関係エラー
 ```bash
 # 依存スタックの状態確認
-./infrastructure/deploy-stacks.sh status
+./infrastructure/deploy-automated.sh -p <aws_profile> --status
 
 # 依存スタックの再作成
-./infrastructure/deploy-stacks.sh deploy-foundation
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks foundation
 ```
 
 #### パラメータエラー
@@ -263,7 +290,7 @@ aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/cosigner"
 cat infrastructure/parameters/dev/cosigner.json
 
 # パラメータの修正後、再デプロイ
-./infrastructure/deploy-stacks.sh deploy-cosigner
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks cosigner
 ```
 
 ### 2. セキュリティグループエラー
@@ -272,7 +299,7 @@ cat infrastructure/parameters/dev/cosigner.json
 ```bash
 # セキュリティスタックの削除と再作成
 aws cloudformation delete-stack --stack-name e2e-monitor-cbh-security-dev
-./infrastructure/deploy-stacks.sh deploy-security
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks security
 ```
 
 ### 3. VPCエンドポイントエラー
@@ -282,7 +309,7 @@ aws cloudformation delete-stack --stack-name e2e-monitor-cbh-security-dev
 aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=vpc-xxxxx
 
 # セキュリティスタックの再作成
-./infrastructure/deploy-stacks.sh deploy-security
+./infrastructure/deploy-automated.sh -p <aws_profile> --only-stacks security
 ```
 
 ## 📞 サポート
@@ -303,4 +330,4 @@ aws cloudformation describe-stack-resources --stack-name YOUR_STACK_NAME
 
 ---
 
-**注意**: このマルチスタック構成により、各コンポーネントの独立したライフサイクル管理が可能になり、システムの保守性と拡張性が大幅に向上します。 
+**注意**: このマルチスタック構成により、各コンポーネントの独立したライフサイクル管理が可能になり、システムの保守性と拡張性が大幅に向上します。
