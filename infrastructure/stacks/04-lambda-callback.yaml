@@ -87,20 +87,6 @@ Resources:
       ParentId: !GetAtt PrivateRestApi.RootResourceId
       PathPart: callback
 
-  ApiResourceV2:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PrivateRestApi
-      ParentId: !Ref ApiResourceCallback
-      PathPart: v2
-
-  ApiResourceTxSignRequest:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref PrivateRestApi
-      ParentId: !Ref ApiResourceV2
-      PathPart: tx_sign_request
-
   ApiResourceHealth:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -112,7 +98,7 @@ Resources:
     Type: AWS::ApiGateway::Method
     Properties:
       RestApiId: !Ref PrivateRestApi
-      ResourceId: !Ref ApiResourceTxSignRequest
+      ResourceId: !Ref ApiResourceCallback
       HttpMethod: POST
       AuthorizationType: NONE
       Integration:
@@ -132,14 +118,14 @@ Resources:
         IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CallbackLambda.Arn}/invocations"
 
-  # Permission for API Gateway to invoke Lambda for POST /callback/v2/tx_sign_request
+  # Permission for API Gateway to invoke Lambda for POST /callback
   TxSignRequestPostPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt CallbackLambda.Arn
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/prod/POST/callback/v2/tx_sign_request"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/${Environment}/POST/callback"
 
   # Permission for API Gateway to invoke Lambda for GET /health
   HealthGetPermission:
@@ -148,13 +134,13 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt CallbackLambda.Arn
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/prod/GET/health"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/${Environment}/GET/health"
 
-  ApiDeployment:
+  ApiDeploymentByEnvironment:
     Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref PrivateRestApi
-      StageName: prod
+      StageName: !Ref Environment
     DependsOn:
       - TxSignRequestPostMethod
       - HealthGetMethod
@@ -170,6 +156,6 @@ Outputs:
 
   ApiGatewayInvokeUrl:
     Description: The invoke URL for the API Gateway stage
-    Value: !Sub "https://${PrivateRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+    Value: !Sub "https://${PrivateRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
     Export:
       Name: !Sub ${ProjectName}-${Environment}-ApiGatewayInvokeUrl

@@ -257,6 +257,25 @@ Host AWS-e2e-monitor-cbh-cosigner-dev
 
 aws_profileは、windowsマシンのaws cliの設定ファイル `C:\Users\<user_name>\.aws\config`(例) に設定されている必要がある。
 
+#### EC2(cosigner)へのSSH over Session Manager設定例(macOSマシン) `~/.ssh/config`
+
+事前に Session Manager Plugin をインストールしてください。
+
+```bash
+brew install --cask session-manager-plugin
+session-manager-plugin --version
+```
+
+```sshconfig
+Host AWS-e2e-monitor-cbh-cosigner-dev
+    HostName i-xxxxxxxxxx
+    User ec2-user
+    IdentityFile /Users/<user_name>/.ssh/cosigner_ssh_key_dev.pem
+    ProxyCommand /bin/sh -c "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; aws ssm start-session --target %h --document-name AWS-StartSSHSession --profile <aws_profile>"
+```
+
+aws_profileは、macOSマシンのaws cliの設定ファイル `~/.aws/config`(例) に設定されている必要がある。
+
 
 ### 5. Cosignerの手動設定
 
