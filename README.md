@@ -308,6 +308,63 @@ Firewall / Proxy / WAF で宛先制限を行う場合は、利用中のFireblock
 
 インストール時には、追加で `s3.<region>.amazonaws.com`, `kms.<region>.amazonaws.com`, `bootstrap.pypa.io`, `pypi.org`, `pypi.python.org`, `files.pythonhosted.org`, `fb-certs.s3.amazonaws.com` への到達も必要です。
 
+#### ファイル転送 + ラッパーでのインストール（推奨）
+
+`pushfiles/run_install_from_files.sh` を使うと、Fireblocks installer に必要な値をファイルから読み込み、callback public key の貼り付けを避けてインストールできます。ラッパースクリプトとcallback public keyはローカル端末から `scp` でCosigner EC2へ手動転送します。Fireblocksのインストールパッケージと入力ファイルはEC2上で用意します。
+
+入力ファイルの1〜4行目は以下の順序です。空行は無視されます。例ではEC2上に `/home/ec2-user/e2e-t2.txt` を作成します。
+
+1. KMS CMK ARN
+2. S3 bucket name（`s3://...` や `arn:aws:s3:::` ではなく、バケット名のみ）
+3. Callback URL
+4. Fireblocks pairing token（期限切れ前の1行JWT）
+
+ローカル端末から、ラッパースクリプトとcallback public keyを転送します。
+
+```bash
+# 例: SSH config に Cosigner EC2 の Host を定義済みの場合
+COSIGNER_HOST="AWS-e2e-monitor-cbh-cosigner-dev"
+
+scp \
+  pushfiles/run_install_from_files.sh \
+  certs/callback_public.pem \
+  "$COSIGNER_HOST:/home/ec2-user/"
+```
+
+Cosigner EC2上で入力ファイルを作成し、Fireblocks Consoleから取得したインストールパッケージURLを使って直接ダウンロード・展開します。
+
+```bash
+cd /home/ec2-user
+
+cat > e2e-t2.txt <<'EOF'
+arn:aws:kms:ap-northeast-1:123456789012:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+e2e-monitor-cbh-cosigner-dev-123456789012
+https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/callback
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+EOF
+
+wget -O nitro-cosigner.tar.gz "<cosigner_install_script_url>"
+tar -xzvf nitro-cosigner.tar.gz
+chmod +x run_install_from_files.sh install.sh
+./run_install_from_files.sh
+```
+
+デフォルトでは、ラッパーは同じディレクトリにある以下のファイルを読み込みます。
+
+- `./e2e-t2.txt`
+- `./callback_public.pem`
+- `./install.sh`
+
+ファイル名や配置を変える場合は明示的に指定できます。
+
+```bash
+./run_install_from_files.sh <input_file> <callback_public_key_pem> <install_sh>
+```
+
+ラッパーは `/opt/fireblocks` が既に存在する場合に `--force` を付けて再実行し、Nitro Enclaves allocator によりCPUが予約済みの場合は再実行前に解放を試みます。
+
+#### 対話式でのインストール
+
 CosignerマシンにSSH接続し、以下の手順でCosignerソフトウェアをインストール
 
 ```bash
