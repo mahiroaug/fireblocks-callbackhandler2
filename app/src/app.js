@@ -201,6 +201,22 @@ async function processTxSignRequest(jwtToken, requestId) {
       };
     }
     
+    const parts = signedRes.split('.');
+    const fullJwtLogging = (process.env.FULL_JWT_LOGGING || 'false').toLowerCase() === 'true';
+    const signedJwtSummary = {
+      parts: parts.length,
+      headerLength: parts[0]?.length,
+      payloadLength: parts[1]?.length,
+      signatureLength: parts[2]?.length,
+      signaturePrefix: parts[2]?.slice(0, 16),
+      signatureSuffix: parts[2]?.slice(-16),
+      signatureAllZero: /^0+$/.test(parts[2] || "")
+    };
+    if (fullJwtLogging) {
+      signedJwtSummary.signature = parts[2];
+    }
+    logInfo("Signed JWT summary", signedJwtSummary, requestId);
+    
     // 成功応答
     const responseTime = Date.now() - startTime;
     logInfo("Transaction processing completed", {
