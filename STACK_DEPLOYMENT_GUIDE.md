@@ -256,9 +256,11 @@ IaC担当はCloudFormation出力値と入力ルールを運用担当者へ渡し
 IaC担当が渡す値:
 - S3 bucket name: `CosignerS3BucketName`（ARNではなくバケット名）
 - CMK ARN: `CosignerKMSKeyArn`
-- Callback URL: `04-lambda-callback` スタックのAPI Gateway URL
+- Callback URL: `04-lambda-callback` スタックの `CallbackUrl` 出力値（インストール時に渡す値は `.../<env>/callback` まで）
 - Callback public key: `certs/callback_public.pem`
 - Fireblocks SaaS環境: `global`, `europe`, `swiss`
+
+Fireblocksは保存したCallback URLをもとに、実際の署名要求では `/callback/v2/tx_sign_request` を呼び出します。API Gateway側は `/callback/{proxy+}` でこの実リクエストを受けます。
 
 運用担当者がEC2上で確認するコマンド:
 ```bash

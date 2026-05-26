@@ -287,7 +287,7 @@ aws_profileは、macOSマシンのaws cliの設定ファイル `~/.aws/config`(�
 IaC担当が受け渡す値:
 - S3 bucket name: `CosignerS3BucketName` の出力値（ARNではなくバケット名のみ）
 - CMK ARN: `CosignerKMSKeyArn` の出力値
-- Callback URL: `04-lambda-callback` スタックのAPI Gateway URL
+- Callback URL: `04-lambda-callback` スタックの `CallbackUrl` 出力値（インストール時に渡す値は `.../<env>/callback` まで）
 - Callback public key: `certs/callback_public.pem` の内容
 
 運用担当が確認する値:
@@ -316,7 +316,7 @@ Firewall / Proxy / WAF で宛先制限を行う場合は、利用中のFireblock
 
 1. KMS CMK ARN
 2. S3 bucket name（`s3://...` や `arn:aws:s3:::` ではなく、バケット名のみ）
-3. Callback URL
+3. Callback URL（インストール時に渡す値は `.../<env>/callback` まで）
 4. Fireblocks pairing token（期限切れ前の1行JWT）
 
 ローカル端末から、ラッパースクリプトとcallback public keyを転送します。
@@ -339,7 +339,7 @@ cd /home/ec2-user
 cat > e2e-t2.txt <<'EOF'
 arn:aws:kms:ap-northeast-1:123456789012:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 e2e-monitor-cbh-cosigner-dev-123456789012
-https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/callback
+https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/dev/callback
 eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
 EOF
 
@@ -362,6 +362,8 @@ chmod +x run_install_from_files.sh install.sh
 ```
 
 ラッパーは `/opt/fireblocks` が既に存在する場合に `--force` を付けて再実行し、Nitro Enclaves allocator によりCPUが予約済みの場合は再実行前に解放を試みます。
+
+Fireblocks側はこのCallback URLをもとに、実際の署名要求では `/callback/v2/tx_sign_request` を呼び出します。API Gateway側は `/callback/{proxy+}` も受けられるため、この実リクエストもLambdaへ転送されます。
 
 #### 対話式でのインストール
 
@@ -402,7 +404,7 @@ callback handlerを設定する場合
 
 - callback URLを入力
 
-　例：https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/callback
+　例：https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/dev/callback
 
 - callback public keyを入力
 
