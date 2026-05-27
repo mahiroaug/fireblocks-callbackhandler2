@@ -107,8 +107,13 @@ if ! openssl rsa -pubin -in "$PUBLIC_KEY_FILE" -noout >/dev/null 2>&1; then
 fi
 
 # Convert PEM file to literal '\n' style expected by the installer env var.
+# Each PEM line ends with a single 2-byte sequence: backslash + 'n' (0x5c 0x6e),
+# matching the format produced by Fireblocks' handle_interactive.sh:
+#     sed -e 's/$/\\n/' callbackPublicKey.pem | tr -d '\n'
+# The enclave-side filter pipeline (filter_by_shell.sh + filter_by_py.py)
+# expects this exact format.
 export CALLBACK_PUBLIC_KEY
-CALLBACK_PUBLIC_KEY="$(awk '{ printf "%s\\\\n", $0 }' "$PUBLIC_KEY_FILE")"
+CALLBACK_PUBLIC_KEY="$(awk '{ printf "%s\\n", $0 }' "$PUBLIC_KEY_FILE")"
 
 
 # If a previous install enabled Nitro Enclaves allocator, host-visible CPUs may
@@ -194,32 +199,15 @@ else
   sudo --preserve-env=KEY_ARN,BUCKET_NAME,CALLBACK_URL,PAIRING_TOKEN,CALLBACK_PUBLIC_KEY "$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}"
 fi
 
-echo "Normalizing /opt/fireblocks/env.txt for enclave env parser..."
-tmp_env_file="$(mktemp)"
-python3 - "$tmp_env_file" <<'PY'
-import os
-import shlex
-import sys
-
-path = sys.argv[1]
-keys = [
-    "KEY_ARN",
-    "BUCKET_NAME",
-    "PAIRING_TOKEN",
-    "CALLBACK_URL",
-    "CALLBACK_PUBLIC_KEY",
-    "CALLBACK_CERT",
-]
-
-with open(path, "w", encoding="utf-8") as f:
-    for key in keys:
-        value = os.environ.get(key)
-        if value is None:
-            continue
-        f.write(f"{key}={shlex.quote(value)}\n")
-PY
-sudo install -m 0644 -o root -g root "$tmp_env_file" /opt/fireblocks/env.txt
-rm -f "$tmp_env_file"
+# NOTE: the previous version of this wrapper rewrote env.txt with shlex.quote()
+# wrapping each value in single quotes. That broke the enclave-side filter:
+# /opt/fireblocks/filter_by_shell.sh validates each line with the regex
+#   ^[A-Z]+[A-Z_]*=[-A-Za-z0-9_\\/&:@.=#% +]+$
+# Single-quote (') is NOT in the allowed-char set, so single-quoted lines were
+# silently dropped (notably CALLBACK_PUBLIC_KEY) and never reached the cosigner.
+# install.sh already runs `env > /opt/fireblocks/env.txt`, which produces the
+# unquoted KEY=VALUE format expected by Fireblocks' standard pipeline. Do not
+# rewrite env.txt here.
 
 
 echo "Restarting cosigner services with normalized environment..."
