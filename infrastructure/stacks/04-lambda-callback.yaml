@@ -87,6 +87,13 @@ Resources:
       ParentId: !GetAtt PrivateRestApi.RootResourceId
       PathPart: callback
 
+  ApiResourceCallbackProxy:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ParentId: !Ref ApiResourceCallback
+      PathPart: "{proxy+}"
+
   ApiResourceHealth:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -99,6 +106,18 @@ Resources:
     Properties:
       RestApiId: !Ref PrivateRestApi
       ResourceId: !Ref ApiResourceCallback
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CallbackLambda.Arn}/invocations"
+
+  CallbackProxyPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref PrivateRestApi
+      ResourceId: !Ref ApiResourceCallbackProxy
       HttpMethod: POST
       AuthorizationType: NONE
       Integration:
@@ -127,6 +146,15 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/${Environment}/POST/callback"
 
+  # Permission for API Gateway to invoke Lambda for POST /callback/{proxy+}
+  CallbackProxyPostPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CallbackLambda.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/${Environment}/POST/callback/*"
+
   # Permission for API Gateway to invoke Lambda for GET /health
   HealthGetPermission:
     Type: AWS::Lambda::Permission
@@ -136,15 +164,18 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PrivateRestApi}/${Environment}/GET/health"
 
-  ApiDeploymentByEnvironment:
+  ApiDeploymentCallbackProxy20260526:
     Type: AWS::ApiGateway::Deployment
     Properties:
       RestApiId: !Ref PrivateRestApi
       StageName: !Ref Environment
+      Description: !Sub "Deployment for ${Environment} callback proxy route"
     DependsOn:
       - TxSignRequestPostMethod
+      - CallbackProxyPostMethod
       - HealthGetMethod
       - TxSignRequestPostPermission
+      - CallbackProxyPostPermission
       - HealthGetPermission
 
 Outputs:
@@ -159,3 +190,9 @@ Outputs:
     Value: !Sub "https://${PrivateRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
     Export:
       Name: !Sub ${ProjectName}-${Environment}-ApiGatewayInvokeUrl
+
+  CallbackUrl:
+    Description: Callback base URL to provide to the Fireblocks Cosigner installer
+    Value: !Sub "https://${PrivateRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/callback"
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CallbackUrl

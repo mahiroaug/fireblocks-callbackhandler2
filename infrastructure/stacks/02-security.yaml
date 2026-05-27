@@ -13,6 +13,21 @@ Parameters:
     AllowedValues: [dev, stg, prod, cm]
     Description: Environment name
 
+  FireblocksSaaSEnvironment:
+    Type: String
+    Default: global
+    AllowedValues: [global, europe, swiss]
+    Description: Fireblocks SaaS environment used to select the Nitro PCR8 attestation value
+
+Mappings:
+  FireblocksPCR8:
+    global:
+      Value: da1d9eca20ce98ab4fdbc51f8e5a2307fd4c61829b7d8bff40976cd6676862c8f3476ff4bdd0f65ecf4a48d6eb3099a8
+    europe:
+      Value: fffc94d68a150b49dc39b23954c793cd1a4f7972f528a1ee258dc130b6cd9454e29ae72ef66bd9697a55e774e17a2d49
+    swiss:
+      Value: 69b1fbe9fb4ea49e084fe6f9f9623d871bd22ceb5efad47b1a8d3708e6674868cad8bf088ced3976c2194360c7d58219
+
 Resources:
   # Cosigner用セキュリティグループ
   CosignerSecurityGroup:
@@ -87,7 +102,7 @@ Resources:
       DestinationSecurityGroupId: !Ref VPCEndpointSecurityGroup
       Description: "HTTPS to VPC Endpoints"
 
-  # Cosigner -> Fireblocks SaaS (api.fireblocks.io) via NAT Gateway
+  # Cosigner -> Fireblocks SaaS and install dependencies via NAT Gateway
   # 最小権限の原則: HTTPS (443) のみ許可
   CosignerToFireblocksSaaSRule:
     Type: AWS::EC2::SecurityGroupEgress
@@ -97,7 +112,7 @@ Resources:
       FromPort: 443
       ToPort: 443
       CidrIp: 0.0.0.0/0
-      Description: "HTTPS to Fireblocks SaaS (api.fireblocks.io) via NAT Gateway"
+      Description: "HTTPS to Fireblocks SaaS, AWS regional APIs, and PyPI via NAT Gateway"
 
   # Lambda -> VPC Endpoints
   LambdaToVPCEndpointsRule:
@@ -212,6 +227,20 @@ Resources:
             Action: "execute-api:Invoke"
             Resource: "*"
 
+  # KMS VPC Endpoint (Cosigner/Lambda -> KMS)
+  KMSEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-${Environment}-VPC-ID
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.kms"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${ProjectName}-${Environment}-PrivateSubnet-ID
+      SecurityGroupIds:
+        - !Ref VPCEndpointSecurityGroup
+      PrivateDnsEnabled: true
+
   # ECR VPC Endpoint (Lambda Container Image用)
   ECREndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -292,12 +321,19 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/cosigner*"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/${ProjectName}-cosigner-${Environment}:*"
+              - Sid: ListBuckets
+                Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
+                  - s3:GetObjectAcl
+                  - s3:PutObjectAcl
                 Resource: !Sub "arn:aws:s3:::${ProjectName}-cosigner-${Environment}-${AWS::AccountId}/*"
               - Effect: Allow
                 Action:
@@ -377,11 +413,38 @@ Resources:
       KeyPolicy:
         Version: "2012-10-17"
         Statement:
-          - Sid: Enable IAM User Permissions
+          - Sid: Enable enclave data processing for specific role
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt CosignerRole.Arn
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyPair
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:GenerateDataKeyPairWithoutPlaintext
+              - kms:GenerateRandom
+              - kms:GetKeyPolicy
+            Resource: "*"
+            Condition:
+              StringEqualsIgnoreCase:
+                "kms:RecipientAttestation:PCR8": !FindInMap [FireblocksPCR8, !Ref FireblocksSaaSEnvironment, Value]
+          - Sid: Allow GetKeyPolicy to co-signer
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt CosignerRole.Arn
+            Action: kms:GetKeyPolicy
+            Resource: "*"
+          - Sid: Allow policy management to root user
             Effect: Allow
             Principal:
               AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
-            Action: "kms:*"
+            Action:
+              - kms:DescribeKey
+              - kms:GetKeyPolicy
+              - kms:PutKeyPolicy
+              - kms:CreateAlias
             Resource: "*"
       Tags:
         - Key: Environment
@@ -412,9 +475,12 @@ Resources:
             Action:
               - kms:Decrypt
               - kms:Encrypt
-              - kms:ReEncrypt*
-              - kms:GenerateDataKey*
-              - kms:DescribeKey
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyPair
+              - kms:GenerateDataKeyWithoutPlaintext
+              - kms:GenerateDataKeyPairWithoutPlaintext
+              - kms:GenerateRandom
+              - kms:GetKeyPolicy
             Resource: !GetAtt CosignerKMSKey.Arn
       Roles:
         - !Ref CosignerRole
@@ -487,3 +553,9 @@ Outputs:
     Value: !Ref APIGatewayEndpoint
     Export:
       Name: !Sub ${ProjectName}-${Environment}-APIGatewayEndpoint-ID
+
+  KMSEndpointId:
+    Description: KMS VPC Endpoint ID
+    Value: !Ref KMSEndpoint
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-KMSEndpoint-ID

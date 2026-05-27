@@ -227,6 +227,32 @@ function summarizeJwt(token) {
   }
 }
 
+function summarizeSignedJwt(token, includeSignature = false) {
+  try {
+    const parts = token.split('.');
+    const [h, p, s] = parts;
+    const summary = {
+      parts: parts.length,
+      tokenLength: token.length,
+      headerLength: h?.length || 0,
+      payloadLength: p?.length || 0,
+      signatureLength: s?.length || 0,
+      signaturePrefix: s?.slice(0, 16),
+      signatureSuffix: s?.slice(-16),
+      signatureAllZeroBytes: isZeroSignature(token),
+      signatureAllZeroString: /^0+$/.test(s || "")
+    };
+
+    if (includeSignature) {
+      summary.signature = s;
+    }
+
+    return summary;
+  } catch (_) {
+    return {};
+  }
+}
+
 function base64UrlToUtf8(b64url) {
   try {
     const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
@@ -344,6 +370,9 @@ async function signJWT(payload, requestId) {
       payloadType: typeof payload,
       tokenLength: token.length
     }, requestId);
+
+    const fullJwtLogging = (process.env.FULL_JWT_LOGGING || 'false').toLowerCase() === 'true';
+    logInfo("JWT sign output summary", summarizeSignedJwt(token, fullJwtLogging), requestId);
     
     return token;
   } catch (error) {

@@ -255,25 +255,33 @@ deploy_stack() {
     if stack_exists "$stack_name"; then
         print_status "$YELLOW" "Updating existing stack: $stack_display_name"
         operation="update"
+        local update_error_file
+        update_error_file=$(mktemp)
         
-        aws cloudformation update-stack \
+        if ! aws cloudformation update-stack \
             --stack-name "$stack_name" \
             --template-body file://"$template_file" \
             --parameters file://"$parameters_file" \
             --capabilities CAPABILITY_NAMED_IAM \
             --region "$REGION" \
             --profile "$PROFILE" \
-            --no-paginate 2>/dev/null || {
+            --no-paginate 2>"$update_error_file"; then
             local exit_code=$?
-            if [ $exit_code -eq 255 ]; then
+            local update_error
+            update_error=$(<"$update_error_file")
+            if [[ "$update_error" == *"No updates are to be performed"* ]]; then
                 print_status "$YELLOW" "No updates required for $stack_display_name"
+                rm -f "$update_error_file"
                 return 0
             else
                 print_status "$RED" "Failed to update $stack_display_name (exit code: $exit_code)"
+                printf '%s\n' "$update_error" | sed 's/^/  /' >&2
+                rm -f "$update_error_file"
                 print_status "$RED" "Check AWS Console for detailed error information"
                 return 1
             fi
-        }
+        fi
+        rm -f "$update_error_file"
     else
         print_status "$GREEN" "Creating new stack: $stack_display_name"
         operation="create"
@@ -617,11 +625,29 @@ main() {
         ECR_REPO_URI_TRIMMED="${ECR_REPO_URI//[[:space:]]/}"
         if [ -n "$ECR_REPO_URI_TRIMMED" ]; then
             if [ -f "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" ]; then
+                IMAGE_URI_TO_DEPLOY="${ECR_REPO_URI_TRIMMED}:latest"
+                ECR_REPOSITORY_NAME="${ECR_REPO_URI_TRIMMED#*/}"
+                IMAGE_DIGEST=$(aws ecr describe-images \
+                    --repository-name "$ECR_REPOSITORY_NAME" \
+                    --image-ids imageTag=latest \
+                    --region "$REGION" \
+                    --profile "$PROFILE" \
+                    --query 'imageDetails[0].imageDigest' \
+                    --output text \
+                    --no-paginate 2>/dev/null || true)
+
+                if [ -n "$IMAGE_DIGEST" ] && [ "$IMAGE_DIGEST" != "None" ]; then
+                    IMAGE_URI_TO_DEPLOY="${ECR_REPO_URI_TRIMMED}@${IMAGE_DIGEST}"
+                    print_status "$GREEN" "✅ Resolved latest image digest: $IMAGE_DIGEST"
+                else
+                    print_status "$YELLOW" "⚠️ Could not resolve latest image digest. Falling back to ${IMAGE_URI_TO_DEPLOY}"
+                fi
+
                 tmp_cb=$(mktemp)
-                jq --arg img "${ECR_REPO_URI_TRIMMED}:latest" 'map(if .ParameterKey=="ContainerImage" then .ParameterValue=$img else . end)' \
+                jq --arg img "$IMAGE_URI_TO_DEPLOY" 'map(if .ParameterKey=="ContainerImage" then .ParameterValue=$img else . end)' \
                   "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json" > "$tmp_cb" && \
                   mv "$tmp_cb" "infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
-                print_status "$GREEN" "✅ Set ContainerImage to ${ECR_REPO_URI_TRIMMED}:latest in lambda-callback.json"
+                print_status "$GREEN" "✅ Set ContainerImage to ${IMAGE_URI_TO_DEPLOY} in lambda-callback.json"
             else
                 print_status "$RED" "❌ Parameter file not found: infrastructure/parameters/${ENVIRONMENT}/lambda-callback.json"
                 print_status "$RED" "    Please run: ./infrastructure/create-parameters.sh ${ENVIRONMENT}"

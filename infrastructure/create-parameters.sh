@@ -50,6 +50,7 @@ print_status "$BLUE" "📝 Reading configuration from: $COMMON_CONFIG"
 project_name=$(jq -r '.ProjectName' "$COMMON_CONFIG")
 environment=$(jq -r '.Environment' "$COMMON_CONFIG")
 region=$(jq -r '.Region' "$COMMON_CONFIG")
+fireblocks_saas_environment=$(jq -r '.FireblocksSaaSEnvironment // "global"' "$COMMON_CONFIG")
 vpc_cidr=$(jq -r '.NetworkConfig.VpcCidr' "$COMMON_CONFIG")
 public_subnet_cidr=$(jq -r '.NetworkConfig.PublicSubnetCidr' "$COMMON_CONFIG")
 private_subnet_cidr=$(jq -r '.NetworkConfig.PrivateSubnetCidr' "$COMMON_CONFIG")
@@ -111,6 +112,10 @@ cat > "$env_dir/security.json" << EOF
     {
         "ParameterKey": "Environment",
         "ParameterValue": "${environment}"
+    },
+    {
+        "ParameterKey": "FireblocksSaaSEnvironment",
+        "ParameterValue": "${fireblocks_saas_environment}"
     }
 ]
 EOF

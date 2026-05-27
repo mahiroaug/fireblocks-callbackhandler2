@@ -16,8 +16,13 @@ Parameters:
   InstanceType:
     Type: String
     Default: c5.xlarge
-    AllowedValues: [c5.large, c5.xlarge, c5.2xlarge, c5.4xlarge]
-    Description: EC2 instance type for Cosigner (Nitro Enclave compatible)
+    AllowedValues: [c5.xlarge, c5a.xlarge]
+    Description: EC2 instance type for Cosigner (Fireblocks-supported Nitro Enclave size)
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Latest Amazon Linux 2023 x86_64 AMI ID from AWS public SSM parameters
 
   EbsVolumeSize:
     Type: Number
@@ -41,11 +46,7 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: aws:kms
-              KMSMasterKeyID: !Sub
-                - "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KeyId}"
-                - KeyId:
-                    Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerKMSKey-ID
+              SSEAlgorithm: AES256
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:
@@ -63,6 +64,34 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
+  # Restrict the persistent storage bucket to the Cosigner EC2 role, as required by Fireblocks.
+  CosignerS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CosignerS3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              - s3:ListBucketMultipartUploads
+              - s3:AbortMultipartUpload
+              - s3:GetObjectAcl
+              - s3:PutObjectAcl
+              - s3:RestoreObject
+            Resource:
+              - !GetAtt CosignerS3Bucket.Arn
+              - !Sub "${CosignerS3Bucket.Arn}/*"
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerRole-ARN
+
   # CloudWatch Log Group for Cosigner
   CosignerLogGroup:
     Type: AWS::Logs::LogGroup
@@ -75,7 +104,7 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: ami-03598bf9d15814511 # Amazon Linux 2023 (ap-northeast-1)
+      ImageId: !Ref LatestAmiId
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs:
@@ -91,18 +120,18 @@ Resources:
       KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
       EnclaveOptions:
         Enabled: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          yum update -y
-          yum install -y amazon-ssm-agent
+          dnf update -y
+          dnf install -y amazon-ssm-agent aws-nitro-enclaves-cli
 
           # Enable and start SSM Agent
           systemctl enable amazon-ssm-agent
           systemctl start amazon-ssm-agent
-
-          # Install Nitro Enclaves CLI
-          amazon-linux-extras install aws-nitro-enclaves-cli
 
           # Configure Nitro Enclaves
           usermod -aG ne ec2-user

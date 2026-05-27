@@ -10,13 +10,14 @@ Fireblocks Workspace向けのCallback Handlerアプリケーションです。AW
 
 **Fireblocks Cosignerとは**:
 - [Fireblocks公式ドキュメント](https://developers.fireblocks.com/reference/install-api-cosigner-add-new-cosigner-p2)に基づく実装
-- API Cosignerは、Fireblocks SaaS (`api.fireblocks.io`) との通信が必要
+- API Cosignerは、Fireblocks SaaS (`mobile-api` / `signurl` / `s3signurl`) との通信が必要
 - JWT-based認証によるセキュアな通信フロー
 - Nitro Enclave環境でのハードウェアレベルの分離
 
 **外部通信の必要性**:
 - Cosignerは**必ず**Fireblocks SaaSとの通信が必要
 - NAT Gatewayを通じた制御された外部アクセス
+- インストール時は AWS regional APIs と PyPI (`pypi.org`, `files.pythonhosted.org`) への到達も必要
 - 完全プライベートネットワーク内での安全な運用
 
 ## 🏗️ アーキテクチャ
@@ -49,14 +50,14 @@ flowchart TB
 
     subgraph External["📡 External Resources"]
         APIGW["🚀 API Gateway<br/>(Private REST API)"]
-        FireblocksSaaS["🔥 Fireblocks SaaS<br/>(api.fireblocks.io)"]
+        FireblocksSaaS["🔥 Fireblocks SaaS<br/>(mobile-api/signurl/s3signurl)"]
         SSM["🔐 SSM Parameter Store<br/>(証明書管理)"]
         ECR["📦 ECR<br/>(コンテナイメージ)"]
         CloudWatch["📊 CloudWatch Logs<br/>(監視)"]
     end
 
     IGW -->|"Internet Access"| NAT
-    Cosigner -->|"Fireblocks SaaS API<br/>HTTPS (443)"| NAT --> FireblocksSaaS
+    Cosigner -->|"Fireblocks SaaS / install deps<br/>HTTPS (443)"| NAT --> FireblocksSaaS
     Cosigner -->|"Invoke Lambda<br/>HTTPS (443)"| APIGW_EP --> APIGW
     APIGW -->|"Event Trigger"| Lambda
     Lambda -->|"証明書取得"| SSMEP
@@ -279,6 +280,93 @@ aws_profileは、macOSマシンのaws cliの設定ファイル `~/.aws/config`(�
 
 ### 5. Cosignerの手動設定
 
+#### EC2へ直接アクセスできない場合の責務分担
+
+このリポジトリでは、CloudFormation 側で公式要件に合わせた AWS リソースを作成します。一方で、Fireblocks Console の操作、ペアリングトークンの発行、EC2上での `install.sh` 実行、Owner のMPC承認は実機アクセス権を持つ運用担当者が実施してください。
+
+IaC担当が受け渡す値:
+- S3 bucket name: `CosignerS3BucketName` の出力値（ARNではなくバケット名のみ）
+- CMK ARN: `CosignerKMSKeyArn` の出力値
+- Callback URL: `04-lambda-callback` スタックの `CallbackUrl` 出力値（インストール時に渡す値は `.../<env>/callback` まで）
+- Callback public key: `certs/callback_public.pem` の内容
+
+運用担当が確認する値:
+- Pairing token は Fireblocks Console から発行し、Mainnetでは1時間以内に使用する
+- Installation package URL はFireblocks ConsoleのManual欄から取得し、有効期限内に使用する
+- API user が未ペアリング状態であること
+- Owner がMPC key share承認通知を受け取れる状態であること
+
+#### Fireblocks SaaS環境別の通信先
+
+Firewall / Proxy / WAF で宛先制限を行う場合は、利用中のFireblocks SaaS環境に合わせて以下を許可してください。AWS内でDNSベース許可が難しい場合は、公式推奨どおり outbound HTTPS (`443`) を許可します。
+
+| SaaS環境 | Fireblocksドメイン |
+| --- | --- |
+| Global | `mobile-api.fireblocks.io`, `signurl.fireblocks.io`, `s3signurl.fireblocks.io` |
+| Europe | `eu2-mobile-api.fireblocks.io`, `eu2-signurl.fireblocks.io`, `eu2-s3signurl.fireblocks.io` |
+| Swiss | `eu-mobile-api.fireblocks.io`, `eu-signurl.fireblocks.io`, `eu-s3signurl.fireblocks.io` |
+
+インストール時には、追加で `s3.<region>.amazonaws.com`, `kms.<region>.amazonaws.com`, `bootstrap.pypa.io`, `pypi.org`, `pypi.python.org`, `files.pythonhosted.org`, `fb-certs.s3.amazonaws.com` への到達も必要です。
+
+#### ファイル転送 + ラッパーでのインストール（推奨）
+
+`pushfiles/run_install_from_files.sh` を使うと、Fireblocks installer に必要な値をファイルから読み込み、callback public key の貼り付けを避けてインストールできます。ラッパースクリプトとcallback public keyはローカル端末から `scp` でCosigner EC2へ手動転送します。Fireblocksのインストールパッケージと入力ファイルはEC2上で用意します。
+
+入力ファイルの1〜4行目は以下の順序です。空行は無視されます。例ではEC2上に `/home/ec2-user/e2e-t2.txt` を作成します。
+
+1. KMS CMK ARN
+2. S3 bucket name（`s3://...` や `arn:aws:s3:::` ではなく、バケット名のみ）
+3. Callback URL（インストール時に渡す値は `.../<env>/callback` まで）
+4. Fireblocks pairing token（期限切れ前の1行JWT）
+
+ローカル端末から、ラッパースクリプトとcallback public keyを転送します。
+
+```bash
+# 例: SSH config に Cosigner EC2 の Host を定義済みの場合
+COSIGNER_HOST="AWS-e2e-monitor-cbh-cosigner-dev"
+
+scp \
+  pushfiles/run_install_from_files.sh \
+  certs/callback_public.pem \
+  "$COSIGNER_HOST:/home/ec2-user/"
+```
+
+Cosigner EC2上で入力ファイルを作成し、Fireblocks Consoleから取得したインストールパッケージURLを使って直接ダウンロード・展開します。
+
+```bash
+cd /home/ec2-user
+
+cat > e2e-t2.txt <<'EOF'
+arn:aws:kms:ap-northeast-1:123456789012:key/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+e2e-monitor-cbh-cosigner-dev-123456789012
+https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/dev/callback
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+EOF
+
+wget -O nitro-cosigner.tar.gz "<cosigner_install_script_url>"
+tar -xzvf nitro-cosigner.tar.gz
+chmod +x run_install_from_files.sh install.sh
+./run_install_from_files.sh
+```
+
+デフォルトでは、ラッパーは同じディレクトリにある以下のファイルを読み込みます。
+
+- `./e2e-t2.txt`
+- `./callback_public.pem`
+- `./install.sh`
+
+ファイル名や配置を変える場合は明示的に指定できます。
+
+```bash
+./run_install_from_files.sh <input_file> <callback_public_key_pem> <install_sh>
+```
+
+ラッパーは `/opt/fireblocks` が既に存在する場合に `--force` を付けて再実行し、Nitro Enclaves allocator によりCPUが予約済みの場合は再実行前に解放を試みます。
+
+Fireblocks側はこのCallback URLをもとに、実際の署名要求では `/callback/v2/tx_sign_request` を呼び出します。API Gateway側は `/callback/{proxy+}` も受けられるため、この実リクエストもLambdaへ転送されます。
+
+#### 対話式でのインストール
+
 CosignerマシンにSSH接続し、以下の手順でCosignerソフトウェアをインストール
 
 ```bash
@@ -302,6 +390,7 @@ sudo ./install.sh
 - S3 bucket nameを入力
 
   例：e2e-monitor-cbh-cosigner-stg-123456789012
+  ※ `s3://...` や `arn:aws:s3:::...` ではなく、バケット名のみを入力してください。
 
 - KMSのARNを入力
 
@@ -315,7 +404,7 @@ callback handlerを設定する場合
 
 - callback URLを入力
 
-　例：https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/callback
+　例：https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/dev/callback
 
 - callback public keyを入力
 
@@ -485,6 +574,20 @@ sudo logrotate -d /etc/logrotate.conf
 
 #### よくある失敗パターンと対処法
 
+0. **Cosignerペアリング失敗**
+   ```bash
+   # 運用担当者がCosigner EC2上で確認
+   sudo ./fireblocks/cosigner get-status
+   sudo ./fireblocks/cosigner logs
+   sudo ./fireblocks/cosigner list-users
+   ```
+
+   一次切り分け:
+   - `401 Unauthorized`: Pairing token期限切れ、API user状態、トークンのコピーミスを確認
+   - `403 Forbidden`: Firewall / Proxy / WAF がFireblocksドメインまたはPyPI/AWS regional endpointを遮断していないか確認
+   - `MPC setup not completed`: Workspace Owner のFireblocks mobile appでMPC key share承認待ち
+   - KMS/S3エラー: 入力したS3 bucket nameがARNではないこと、CMK ARNが `arn:aws:kms:<region>:<account>:key/<id>` 形式であることを確認
+
 1. **JWT証明書が見つからない（デプロイ前エラー）**
    ```bash
    # JWT証明書を生成してから再実行
@@ -594,9 +697,10 @@ aws ssm get-parameters \
 ## 🛡️ 実運用における重要なポイント
 
 ### 外部通信要件
-- CosignerはFireblocks SaaS (`api.fireblocks.io`) との通信が必須
+- CosignerはFireblocks SaaS環境別ドメイン（`mobile-api` / `signurl` / `s3signurl`）との通信が必須
 - NAT Gateway経由の制御されたアクセス
 - セキュリティグループによる最小権限通信
+- Fireblocks SaaS環境は `FireblocksSaaSEnvironment` パラメータ（`global`, `europe`, `swiss`）で指定し、PCR8 attestation値を切り替える
 
 ### デプロイメント時の確認事項
 1. VPC CIDR設定 (10.0.0.0/16)
@@ -626,8 +730,8 @@ aws ssm get-parameters \
 
 ### 📖 参考資料
 
-詳細な設定については、各CloudFormationスタックファイルを参照してください。 
+詳細な設定については、各CloudFormationスタックファイルを参照してください。
 
 - [Fireblocks API Cosigner ドキュメント](https://developers.fireblocks.com/reference/install-api-cosigner-add-new-cosigner-p2)
 - [AWS Lambda Container Images](https://docs.aws.amazon.com/lambda/latest/dg/images.html)
-- [AWS SSM Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) 
+- [AWS SSM Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)
