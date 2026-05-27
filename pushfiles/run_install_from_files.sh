@@ -107,14 +107,8 @@ if ! openssl rsa -pubin -in "$PUBLIC_KEY_FILE" -noout >/dev/null 2>&1; then
 fi
 
 # Convert PEM file to literal '\n' style expected by the installer env var.
-# Each PEM line ends with a single 2-byte sequence: backslash + 'n' (0x5c 0x6e),
-# matching the format produced by Fireblocks' handle_interactive.sh:
-#     sed -e 's/$/\\n/' callbackPublicKey.pem | tr -d '\n'
-# The enclave-side env parser performs one level of unescape, so double-escaping
-# here ('%s\\\\n') leaks a stray backslash into the loaded PEM and causes the
-# cosigner's PEM parser to fail with Error 22 ("Failed to parse JWT response").
 export CALLBACK_PUBLIC_KEY
-CALLBACK_PUBLIC_KEY="$(awk '{ printf "%s\\n", $0 }' "$PUBLIC_KEY_FILE")"
+CALLBACK_PUBLIC_KEY="$(awk '{ printf "%s\\\\n", $0 }' "$PUBLIC_KEY_FILE")"
 
 
 # If a previous install enabled Nitro Enclaves allocator, host-visible CPUs may
