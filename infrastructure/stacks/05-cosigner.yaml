@@ -34,8 +34,37 @@ Parameters:
     Description: EC2 Key Pair name for emergency access
     Default: ""
 
+  CosignerAppLogGroupName:
+    Type: String
+    Default: ""
+    Description: CloudWatch Log Group for customer_cosigner app logs (empty = /fireblocks/ProjectName-customer_cosigner-Environment)
+
+  CosignerLogRetentionDays:
+    Type: Number
+    Default: 90
+    Description: Retention in days for customer_cosigner application logs
+
+  CosignerAppLogKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: Optional KMS key ARN for encrypting customer_cosigner application logs
+
+  CosignerAlarmNotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address for cosigner ERROR alarm notifications (requires subscription confirmation)
+
+  CosignerSnsKmsKeyArn:
+    Type: String
+    Default: ""
+    Description: Optional KMS key ARN for encrypting the cosigner alarm SNS topic
+
 Conditions:
   HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+  UseDefaultAppLogGroupName: !Equals [!Ref CosignerAppLogGroupName, ""]
+  HasAppLogKmsKey: !Not [!Equals [!Ref CosignerAppLogKmsKeyArn, ""]]
+  HasAlarmNotificationEmail: !Not [!Equals [!Ref CosignerAlarmNotificationEmail, ""]]
+  HasSnsKmsKey: !Not [!Equals [!Ref CosignerSnsKmsKeyArn, ""]]
 
 Resources:
   # S3 Bucket for Cosigner configuration and state
@@ -92,12 +121,62 @@ Resources:
                 aws:PrincipalArn:
                   Fn::ImportValue: !Sub ${ProjectName}-${Environment}-CosignerRole-ARN
 
-  # CloudWatch Log Group for Cosigner
+  # CloudWatch Log Group for Cosigner init/system logs (legacy)
   CosignerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/ec2/${ProjectName}-cosigner-${Environment}"
       RetentionInDays: 30
+
+  # CloudWatch Log Group for customer_cosigner application logs (primary source)
+  CosignerAppLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !If
+        - UseDefaultAppLogGroupName
+        - !Sub "/fireblocks/${ProjectName}-customer_cosigner-${Environment}"
+        - !Ref CosignerAppLogGroupName
+      RetentionInDays: !Ref CosignerLogRetentionDays
+      KmsKeyId: !If [HasAppLogKmsKey, !Ref CosignerAppLogKmsKeyArn, !Ref "AWS::NoValue"]
+
+  # CloudWatch Agent configuration for /var/log/customer_cosigner.log
+  CosignerCloudWatchAgentConfigParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${ProjectName}/${Environment}/cloudwatch-agent/customer-cosigner
+      Type: String
+      Description: CloudWatch Agent configuration for customer_cosigner application logs
+      Value: !Sub
+        - |
+          {
+            "logs": {
+              "logs_collected": {
+                "files": {
+                  "collect_list": [
+                    {
+                      "file_path": "/var/log/customer_cosigner.log",
+                      "log_group_name": "${AppLogGroupName}",
+                      "log_stream_name": "{instance_id}",
+                      "timezone": "UTC"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        - AppLogGroupName: !If
+            - UseDefaultAppLogGroupName
+            - !Sub "/fireblocks/${ProjectName}-customer_cosigner-${Environment}"
+            - !Ref CosignerAppLogGroupName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: cosigner
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
 
   # Cosigner EC2 Instance
   CosignerInstance:
@@ -127,11 +206,14 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           dnf update -y
-          dnf install -y amazon-ssm-agent aws-nitro-enclaves-cli
+          dnf install -y amazon-ssm-agent amazon-cloudwatch-agent aws-nitro-enclaves-cli
 
           # Enable and start SSM Agent
           systemctl enable amazon-ssm-agent
           systemctl start amazon-ssm-agent
+
+          # CloudWatch Agent package only; configuration is applied via SSM State Manager Association
+          systemctl enable amazon-cloudwatch-agent
 
           # Configure Nitro Enclaves
           usermod -aG ne ec2-user
@@ -164,7 +246,87 @@ Resources:
         - Key: ManagedBy
           Value: cloudformation
 
-  # CloudWatch Alarms for Cosigner
+  # Apply CloudWatch Agent configuration to Cosigner instance (works for existing instances without replacement)
+  CosignerCloudWatchAgentAssociation:
+    Type: AWS::SSM::Association
+    DependsOn:
+      - CosignerInstance
+      - CosignerCloudWatchAgentConfigParameter
+    Properties:
+      Name: AmazonCloudWatch-ManageAgent
+      AssociationName: !Sub ${ProjectName}-cosigner-cwagent-${Environment}
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref CosignerInstance
+      Parameters:
+        action:
+          - configure
+        mode:
+          - ec2
+        optionalConfigurationSource:
+          - ssm
+        optionalConfigurationLocation:
+          - !Sub /${ProjectName}/${Environment}/cloudwatch-agent/customer-cosigner
+        optionalRestart:
+          - "yes"
+      ScheduleExpression: rate(30 minutes)
+      ApplyOnlyAtCronInterval: false
+
+  # SNS topic for cosigner ERROR alarms
+  CosignerErrorAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${ProjectName}-cosigner-error-alarm-${Environment}
+      DisplayName: !Sub "Cosigner ERROR Alarm (${Environment})"
+      KmsMasterKeyId: !If [HasSnsKmsKey, !Ref CosignerSnsKmsKeyArn, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Stack
+          Value: cosigner
+        - Key: Project
+          Value: fireblocks-callback-handler
+        - Key: ManagedBy
+          Value: cloudformation
+
+  CosignerErrorAlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmNotificationEmail
+    Properties:
+      TopicArn: !Ref CosignerErrorAlarmTopic
+      Protocol: email
+      Endpoint: !Ref CosignerAlarmNotificationEmail
+
+  # Metric filter for ERROR lines in customer_cosigner logs
+  CosignerErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref CosignerAppLogGroup
+      FilterPattern: '"customer_cosigner:" ERROR'
+      MetricTransformations:
+        - MetricNamespace: Fireblocks/Cosigner
+          MetricName: ErrorCount
+          MetricValue: "1"
+          DefaultValue: 0
+
+  CosignerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-cosigner-error-count-${Environment}
+      AlarmDescription: "ERROR count in customer_cosigner application logs"
+      Namespace: Fireblocks/Cosigner
+      MetricName: ErrorCount
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CosignerErrorAlarmTopic
+
+  # CloudWatch Alarms for Cosigner EC2 metrics
   HighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -186,7 +348,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub ${ProjectName}-cosigner-high-memory-${Environment}
-      AlarmDescription: "High memory utilization for Cosigner instance"
+      AlarmDescription: "High memory utilization for Cosigner instance (requires CWAgent metrics collection; not enabled by default)"
       MetricName: mem_used_percent
       Namespace: CWAgent
       Statistic: Average
@@ -230,10 +392,34 @@ Outputs:
       Name: !Sub ${ProjectName}-${Environment}-CosignerInstance-PrivateIP
 
   CosignerLogGroupName:
-    Description: CloudWatch Log Group Name for Cosigner
+    Description: CloudWatch Log Group Name for Cosigner init/system logs
     Value: !Ref CosignerLogGroup
     Export:
       Name: !Sub ${ProjectName}-${Environment}-CosignerLogGroup-Name
+
+  CosignerAppLogGroupName:
+    Description: CloudWatch Log Group Name for customer_cosigner application logs
+    Value: !Ref CosignerAppLogGroup
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CosignerAppLogGroup-Name
+
+  CosignerCloudWatchAgentConfigParameterName:
+    Description: SSM Parameter name for CloudWatch Agent configuration
+    Value: !Ref CosignerCloudWatchAgentConfigParameter
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CosignerCloudWatchAgentConfig-Name
+
+  CosignerCloudWatchAgentAssociationId:
+    Description: SSM State Manager Association ID for CloudWatch Agent
+    Value: !Ref CosignerCloudWatchAgentAssociation
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CosignerCloudWatchAgentAssociation-ID
+
+  CosignerErrorAlarmTopicArn:
+    Description: SNS Topic ARN for cosigner ERROR alarms
+    Value: !Ref CosignerErrorAlarmTopic
+    Export:
+      Name: !Sub ${ProjectName}-${Environment}-CosignerErrorAlarmTopic-ARN
 
   SessionManagerCommand:
     Description: AWS CLI command to connect to Cosigner via Session Manager

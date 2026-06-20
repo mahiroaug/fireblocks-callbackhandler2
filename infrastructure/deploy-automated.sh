@@ -24,31 +24,21 @@ print_status() {
 }
 
 # Configuration
-REGION="ap-northeast-1"
-PROFILE="default"
-ENVIRONMENT="dev"
 FROM_STACK=""
 SKIP_STACKS=""
 DRY_RUN=false
+PROFILE=""
 
-# Load configuration from common.json
-COMMON_CONFIG="infrastructure/parameters/common.json"
-if [ -f "$COMMON_CONFIG" ]; then
-    if ! command -v jq &> /dev/null; then
-        print_status "$RED" "Error: jq is required to parse common.json. Please install jq."
-        exit 1
-    fi
-    
-    PROJECT_NAME=$(jq -r '.ProjectName' "$COMMON_CONFIG")
-    REGION=$(jq -r '.Region' "$COMMON_CONFIG")
-    ENVIRONMENT=$(jq -r '.Environment' "$COMMON_CONFIG")
-    
-    print_status "$GREEN" "Configuration loaded from common.json"
-    print_status "$BLUE" "Project: $PROJECT_NAME, Region: $REGION, Environment: $ENVIRONMENT"
+# Load PROJECT_NAME, ENVIRONMENT, REGION, AWS_PROFILE from .env + common.json
+# shellcheck source=infrastructure/load-config.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-config.sh"
+
+if [ -f "$ENV_FILE" ]; then
+    print_status "$GREEN" "Configuration loaded from .env"
 else
-    PROJECT_NAME="e2e-monitor-cbh"
-    print_status "$YELLOW" "Warning: common.json not found, using default values"
+    print_status "$YELLOW" "Warning: .env not found at $ENV_FILE (using defaults; copy .env.example to .env)"
 fi
+print_status "$BLUE" "Project: $PROJECT_NAME, Region: $REGION, Environment: $ENVIRONMENT"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -89,9 +79,9 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  -e, --environment Environment (dev, staging, prod)"
-            echo "  -r, --region      AWS region"
-            echo "  -p, --profile     AWS profile"
+            echo "  -p, --profile     AWS profile (default: AWS_PROFILE from .env, else 'default')"
+            echo "  -e, --environment Environment override (default: ENVIRONMENT from .env)"
+            echo "  -r, --region      AWS region override (default: AWS_REGION from .env)"
               echo "  --from-stack      Start deployment from specific stack (foundation, security, codebuild, lambda, cosigner)"
   echo "  --skip-stacks     Skip specific stacks (comma-separated: foundation,security,codebuild,lambda,cosigner)"
             echo "  --only-stacks     Run only specified stacks (comma-separated), overrides --from/--skip"
@@ -113,6 +103,14 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Apply defaults from .env when CLI flags are omitted
+if [ -z "$PROFILE" ] && [ -n "$AWS_PROFILE" ]; then
+    PROFILE="$AWS_PROFILE"
+fi
+if [ -z "$PROFILE" ]; then
+    PROFILE="default"
+fi
 
 print_status "$BLUE" "Starting automated deployment..."
 print_status "$BLUE" "Profile: $PROFILE, Region: $REGION, Environment: $ENVIRONMENT"

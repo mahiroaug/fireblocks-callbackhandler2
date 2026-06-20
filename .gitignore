@@ -154,6 +154,9 @@ id_*
 # AWS CLI
 .aws/
 
+# Environment-specific deployment target (copy from .env.example)
+.env
+
 # 自動生成されるパラメータファイル（環境固有）
 infrastructure/parameters/*/
 # common.jsonは管理対象として残す
