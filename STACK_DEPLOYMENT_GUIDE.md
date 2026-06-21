@@ -43,7 +43,8 @@
 **目的**: Fireblocks Cosignerの提供
 - EC2インスタンス（Nitro Enclave有効、IMDSv2必須、Amazon Linux 2023）
 - Cosigner persistent storage用S3 bucketとbucket policy
-- CloudWatch監視設定
+- CloudWatch監視設定（CPU/ステータスチェック/ERRORアラーム）
+- **customer_cosigner アプリログの CloudWatch Logs 連携**（SSM Parameter + State Manager Association）
 
 **依存関係**: Foundation Stack, Security Stack
 
@@ -114,7 +115,13 @@ e2e-monitor-cbh/
 ```
 
 #### パラメータファイルの生成
+
+デプロイ対象の **ProjectName / Environment / AWS profile** はリポジトリルートの `.env` で指定します（`.env.example` をコピーして作成）。ネットワーク CIDR 等は `common.json` に残します。
+
 ```bash
+cp .env.example .env
+vi .env   # PROJECT_NAME, ENVIRONMENT, AWS_REGION, AWS_PROFILE
+
 ./infrastructure/create-parameters.sh
 ```
 
@@ -145,7 +152,7 @@ vi infrastructure/parameters/dev/cosigner.json
 `FireblocksSaaSEnvironment` は `global`, `europe`, `swiss` のいずれかを指定します。この値により、KMS Key Policy の PCR8 attestation 値をFireblocks SaaS環境に合わせて切り替えます。
 
 #### Cosignerスタック
-`cosigner.json` で設定するのは EC2 起動に必要な値のみです。Pairing token とインストールパッケージURLは CloudFormation には保存せず、Fireblocks Consoleから取得して運用担当者がEC2上で `install.sh` 実行時に入力します。
+`cosigner.json` で EC2 起動と CloudWatch ログ連携のパラメータを設定します。Pairing token とインストールパッケージURLは CloudFormation には保存せず、Fireblocks Consoleから取得して運用担当者がEC2上で `install.sh` 実行時に入力します。
 
 ```json
 {
@@ -155,8 +162,28 @@ vi infrastructure/parameters/dev/cosigner.json
 {
     "ParameterKey": "KeyPairName",
     "ParameterValue": "YOUR_KEY_PAIR_NAME"
+},
+{
+    "ParameterKey": "CosignerAppLogGroupName",
+    "ParameterValue": ""
+},
+{
+    "ParameterKey": "CosignerLogRetentionDays",
+    "ParameterValue": "90"
+},
+{
+    "ParameterKey": "CosignerAlarmNotificationEmail",
+    "ParameterValue": "ops@example.com"
 }
 ```
+
+| パラメータ | 説明 |
+|---|---|
+| `CosignerAppLogGroupName` | 空の場合は `/fireblocks/{ProjectName}-customer_cosigner-{Environment}` を使用 |
+| `CosignerLogRetentionDays` | アプリログの保持日数（デフォルト 90） |
+| `CosignerAppLogKmsKeyArn` | 任意。LogGroup KMS 暗号化キー |
+| `CosignerAlarmNotificationEmail` | 任意。ERROR アラーム通知先メール（SNS 購読確認が必要） |
+| `CosignerSnsKmsKeyArn` | 任意。SNS Topic KMS 暗号化キー |
 
 #### Callback Handlerスタック
 ```json
@@ -202,16 +229,106 @@ export STACK_PREFIX="your-custom-prefix"
 2. **Cosigner EC2監視**
    - CPU使用率
    - ステータスチェック
+   - **customer_cosigner アプリログ**（CloudWatch Logs + ERROR MetricFilter + SNS アラーム）
+
+3. **既知事項: HighMemoryAlarm**
+   - `HighMemoryAlarm` は `CWAgent` メトリクス（`mem_used_percent`）を参照しますが、今回の構成ではメトリクス収集は有効化していません（ログ収集のみ）。メモリアラームを有効化するには、別途 CloudWatch Agent のメトリクス収集、`monitoring` VPC Endpoint、`cloudwatch:PutMetricData` 権限が必要です。
+
+### Cosigner アプリログの CloudWatch 連携
+
+**収集対象**: 一次ソース `/var/log/customer_cosigner.log` のみ  
+**収集対象外**: `sudo cosigner logs` が生成する `*_cosigner.log`（スナップショット）
+
+**アーキテクチャ**:
+- CloudWatch Agent 設定: SSM Parameter Store（`/{ProjectName}/{Environment}/cloudwatch-agent/customer-cosigner`）
+- 設定適用: SSM State Manager Association（`AmazonCloudWatch-ManageAgent`、30分間隔で冪等再適用）
+- LogGroup: `/fireblocks/{ProjectName}-customer_cosigner-{Environment}`（ログストリーム: `{instance_id}`）
+- ERROR 監視: MetricFilter（`?ERROR`）→ Alarm（5分・閾値1）→ SNS Topic
+
+**既存 EC2 への反映**: UserData 変更では既存インスタンスに再実行されないため、Association 経由で設定を適用します。スタック更新後、EC2 再作成は不要です。即時反映したい場合:
+
+```bash
+aws ssm start-associations-once \
+  --association-ids "<CosignerCloudWatchAgentAssociationId>" \
+  --region ap-northeast-1 \
+  --profile <aws_profile>
+```
+
+**SNS メール通知**: `CosignerAlarmNotificationEmail` を設定した場合、デプロイ後に届く AWS SNS 確認メールのリンクをクリックして購読を有効化してください。確認完了前は通知されません。
 
 ### ログ確認
 
 ```bash
-# Lambdaログの確認
-aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/e2e-monitor-cbh"
+# ProjectName / Environment は .env の値を使用（例: e2e-monitor-cbh + stg）
+PROJECT=e2e-monitor-cbhv2
+ENV=dev
 
-# Cosignerログの確認
-aws logs describe-log-groups --log-group-name-prefix "/aws/ec2/e2e-monitor-cbh"
+# Lambdaログ
+aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/${PROJECT}-callback-${ENV}"
+
+# Cosigner アプリログ（customer_cosigner 一次ソース）
+aws logs describe-log-groups --log-group-name-prefix "/fireblocks/${PROJECT}-customer_cosigner-${ENV}"
+
+# 最新ログイベントの確認
+INSTANCE_ID=$(aws cloudformation describe-stacks \
+  --stack-name "${PROJECT}-05-cosigner-${ENV}" \
+  --query "Stacks[0].Outputs[?OutputKey=='CosignerInstanceId'].OutputValue" \
+  --output text)
+aws logs tail "/fireblocks/${PROJECT}-customer_cosigner-${ENV}" \
+  --log-stream-names "${INSTANCE_ID}" \
+  --follow
 ```
+
+### 受け入れテスト（Cosigner ログ連携）
+
+1. **Agent 稼働確認**（SSM Run Command または Session Manager）:
+   ```bash
+   sudo amazon-cloudwatch-agent-ctl -a status
+   ```
+   `running` であること。
+
+2. **Logs 受信確認**（CloudWatch Logs Insights）:
+   ```sql
+   fields @timestamp, @message
+   | filter @message like /customer_cosigner:/
+   | sort @timestamp desc
+   | limit 50
+   ```
+
+3. **ERROR メトリクス・Alarm 確認**:
+   - テスト用 ERROR 行を `/var/log/customer_cosigner.log` に追記（本番では慎重に）
+   - 5分以内に `Fireblocks/Cosigner` / `ErrorCount` が増加し Alarm が `ALARM` になること
+
+4. **SNS 通知疎通**:
+   - メール購読を承認済みであること
+   - Alarm 発火後に通知メールが届くこと
+
+5. **logrotate 継続収集**:
+   ```bash
+   sudo logrotate -f /etc/logrotate.d/customer_cosigner
+   sudo amazon-cloudwatch-agent-ctl -a status
+   ```
+   ローテーション後も CloudWatch Logs への新規ログ送信が継続すること（重複・欠落がないこと）。
+
+**ログ形式（実ログに基づく確定値）**:
+
+Fireblocks cosigner のログ行形式:
+```
+customer_cosigner:{pid} {LEVEL} DD/MM/YYYY HH:MM:SS,mmm {message}
+```
+
+例:
+```
+customer_cosigner:738 INFO 21/11/2025 09:21:18,002 rpc/dispatcher/dispatch_server.cpp(186) ...
+```
+
+| 設定 | 値 | 理由 |
+|---|---|---|
+| `timestamp_format` | **未指定** | タイムスタンプは行頭ではなく `customer_cosigner:{pid} {LEVEL}` の後に来るため、Agent の行頭パースでは解釈不可。取り込み時刻を使用 |
+| `FilterPattern` | `"customer_cosigner:" ERROR` | ログレベル `ERROR` の行のみ検知（`INFO` 行や診断ブロックを除外） |
+| Logs Insights 例 | `filter @message like /customer_cosigner:/` | `customer_cosigner:` 形式のログ行を抽出 |
+
+**ログ形式の調整**: 上記は実ログサンプルに基づく確定値です。Cosigner バージョンで形式が変わった場合は SSM Parameter の JSON と MetricFilter を調整してください。
 
 ## 🛡️ セキュリティ考慮事項
 

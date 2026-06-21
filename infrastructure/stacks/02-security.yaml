@@ -320,8 +320,11 @@ Resources:
                 Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
+                  - logs:DescribeLogStreams
                   - logs:PutLogEvents
-                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/${ProjectName}-cosigner-${Environment}:*"
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/ec2/${ProjectName}-cosigner-${Environment}:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/fireblocks/${ProjectName}-customer_cosigner-${Environment}:*"
               - Sid: ListBuckets
                 Effect: Allow
                 Action:

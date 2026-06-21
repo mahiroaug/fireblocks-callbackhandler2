@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Fireblocks Callback Handler - Parameter Files Creation Script
-# This script creates parameter files from common.json before deployment
+# Creates CloudFormation parameter files from .env and common.json
 # Usage: ./create-parameters.sh [environment]
 
 set -e
@@ -20,48 +20,29 @@ print_status() {
     echo -e "${color}${message}${NC}"
 }
 
-# Default environment
-ENVIRONMENT="dev"
-
-# Parse command line arguments
+CLI_ENVIRONMENT=""
 if [ $# -eq 1 ]; then
-    ENVIRONMENT="$1"
+    CLI_ENVIRONMENT="$1"
 fi
 
-# Configuration
-COMMON_CONFIG="infrastructure/parameters/common.json"
+# shellcheck source=load-config.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-config.sh"
 
-# Check if common.json exists
-if [ ! -f "$COMMON_CONFIG" ]; then
-    print_status "$RED" "❌ common.json not found at $COMMON_CONFIG"
-    exit 1
+if [ -n "$CLI_ENVIRONMENT" ]; then
+    ENVIRONMENT="$CLI_ENVIRONMENT"
 fi
 
-# Check if jq is available
-if ! command -v jq &> /dev/null; then
-    print_status "$RED" "❌ jq is required. Please install jq."
-    exit 1
+if [ -f "$ENV_FILE" ]; then
+    print_status "$GREEN" "🚀 Creating parameter files for environment: $ENVIRONMENT"
+    print_status "$BLUE" "📝 Project/Environment from: $ENV_FILE"
+else
+    print_status "$YELLOW" "🚀 Creating parameter files for environment: $ENVIRONMENT"
+    print_status "$YELLOW" "📝 .env not found; using defaults (copy .env.example to .env)"
 fi
-
-print_status "$GREEN" "🚀 Creating parameter files for environment: $ENVIRONMENT"
-print_status "$BLUE" "📝 Reading configuration from: $COMMON_CONFIG"
-
-# Load values from common.json
-project_name=$(jq -r '.ProjectName' "$COMMON_CONFIG")
-environment=$(jq -r '.Environment' "$COMMON_CONFIG")
-region=$(jq -r '.Region' "$COMMON_CONFIG")
-fireblocks_saas_environment=$(jq -r '.FireblocksSaaSEnvironment // "global"' "$COMMON_CONFIG")
-vpc_cidr=$(jq -r '.NetworkConfig.VpcCidr' "$COMMON_CONFIG")
-public_subnet_cidr=$(jq -r '.NetworkConfig.PublicSubnetCidr' "$COMMON_CONFIG")
-private_subnet_cidr=$(jq -r '.NetworkConfig.PrivateSubnetCidr' "$COMMON_CONFIG")
-
-# Override environment if provided as argument
-if [ "$ENVIRONMENT" != "dev" ]; then
-    environment="$ENVIRONMENT"
-fi
+print_status "$BLUE" "📝 Network/Fireblocks settings from: $COMMON_CONFIG"
 
 # Create environment directory
-env_dir="infrastructure/parameters/${environment}"
+env_dir="${REPO_ROOT}/infrastructure/parameters/${ENVIRONMENT}"
 mkdir -p "$env_dir"
 
 print_status "$BLUE" "📁 Creating parameter files in: $env_dir"
@@ -71,23 +52,23 @@ cat > "$env_dir/foundation.json" << EOF
 [
     {
         "ParameterKey": "ProjectName",
-        "ParameterValue": "${project_name}"
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
-        "ParameterValue": "${environment}"
+        "ParameterValue": "${ENVIRONMENT}"
     },
     {
         "ParameterKey": "VpcCIDR",
-        "ParameterValue": "${vpc_cidr}"
+        "ParameterValue": "${VPC_CIDR}"
     },
     {
         "ParameterKey": "PublicSubnetCIDR",
-        "ParameterValue": "${public_subnet_cidr}"
+        "ParameterValue": "${PUBLIC_SUBNET_CIDR}"
     },
     {
         "ParameterKey": "PrivateSubnetCIDR",
-        "ParameterValue": "${private_subnet_cidr}"
+        "ParameterValue": "${PRIVATE_SUBNET_CIDR}"
     }
 ]
 EOF
@@ -107,15 +88,15 @@ cat > "$env_dir/security.json" << EOF
 [
     {
         "ParameterKey": "ProjectName",
-        "ParameterValue": "${project_name}"
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
-        "ParameterValue": "${environment}"
+        "ParameterValue": "${ENVIRONMENT}"
     },
     {
         "ParameterKey": "FireblocksSaaSEnvironment",
-        "ParameterValue": "${fireblocks_saas_environment}"
+        "ParameterValue": "${FIREBLOCKS_SAAS_ENVIRONMENT}"
     }
 ]
 EOF
@@ -125,11 +106,11 @@ cat > "$env_dir/lambda-callback.json" << EOF
 [
     {
         "ParameterKey": "ProjectName",
-        "ParameterValue": "${project_name}"
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
-        "ParameterValue": "${environment}"
+        "ParameterValue": "${ENVIRONMENT}"
     },
     {
         "ParameterKey": "ContainerImage",
@@ -143,11 +124,11 @@ cat > "$env_dir/codebuild.json" << EOF
 [
     {
         "ParameterKey": "ProjectName",
-        "ParameterValue": "${project_name}"
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
-        "ParameterValue": "${environment}"
+        "ParameterValue": "${ENVIRONMENT}"
     }
 ]
 EOF
@@ -157,11 +138,11 @@ cat > "$env_dir/cosigner.json" << EOF
 [
     {
         "ParameterKey": "ProjectName",
-        "ParameterValue": "${project_name}"
+        "ParameterValue": "${PROJECT_NAME}"
     },
     {
         "ParameterKey": "Environment",
-        "ParameterValue": "${environment}"
+        "ParameterValue": "${ENVIRONMENT}"
     },
     {
         "ParameterKey": "InstanceType",
@@ -174,6 +155,26 @@ cat > "$env_dir/cosigner.json" << EOF
     {
         "ParameterKey": "KeyPairName",
         "ParameterValue": "PLACEHOLDER_KEY_PAIR_NAME"
+    },
+    {
+        "ParameterKey": "CosignerAppLogGroupName",
+        "ParameterValue": ""
+    },
+    {
+        "ParameterKey": "CosignerLogRetentionDays",
+        "ParameterValue": "90"
+    },
+    {
+        "ParameterKey": "CosignerAppLogKmsKeyArn",
+        "ParameterValue": ""
+    },
+    {
+        "ParameterKey": "CosignerAlarmNotificationEmail",
+        "ParameterValue": ""
+    },
+    {
+        "ParameterKey": "CosignerSnsKmsKeyArn",
+        "ParameterValue": ""
     }
 ]
 EOF
@@ -198,4 +199,4 @@ print_status "$YELLOW" "   # Get cosigner_public.pem from Fireblocks Console or 
 print_status "$YELLOW" "   # Place it in certs/cosigner_public.pem"
 print_status "$YELLOW" ""
 print_status "$YELLOW" "3. Run deployment (JWT certificates will be auto-registered):"
-print_status "$YELLOW" "   ./infrastructure/deploy-automated.sh -p <aws_profile>" 
+print_status "$YELLOW" "   ./infrastructure/deploy-automated.sh"

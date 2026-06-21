@@ -152,7 +152,9 @@ sequenceDiagram
 - VPC Endpoints経由のセキュアアクセス
 
 ### 監視・ログ
-- CloudWatch Logsによる構造化ログ
+- CloudWatch Logsによる構造化ログ（Lambda）
+- **Cosigner アプリログ**（`/var/log/customer_cosigner.log` → CloudWatch Logs、SSM State Manager Association で適用）
+- ERROR 件数 MetricFilter + CloudWatch Alarm + SNS 通知
 - Lambda メトリクス
 - セキュリティイベント監視
 
@@ -174,8 +176,8 @@ fireblocks-callback-handler/
 │   │   ├── 04-lambda-callback.yaml # Lambda + API Gateway
 │   │   └── 05-cosigner.yaml        # Cosigner設定
 │   └── parameters/                 # パラメータファイル
-│       ├── common.json             # 📝 共通設定（自動生成の基盤）
-│       ├── dev/                    # 開発環境（common.jsonから自動生成）
+│       ├── common.json             # ネットワーク/Fireblocks SaaS 等の共通設定
+│       ├── dev/                    # 環境別パラメータ（create-parameters.sh で生成）
 │       └── production-jp/          # 本番環境（common.jsonから自動生成）
 └── .devcontainer/                   # DevContainer設定
 ```
@@ -193,16 +195,14 @@ code .
 
 
 # 1. パラメータファイルを作成
-# common.json を編集
+# .env.example をコピーし、デプロイ先の ProjectName / Environment / AWS profile を設定
+cp .env.example .env
+vi .env
+
+# ネットワーク等の共通設定は common.json を編集
 vi infrastructure/parameters/common.json
 
-# ProjectName, Environment, Region を編集
-# ProjectName: プロジェクト名
-# Environment: 環境 (dev, staging, prod, cm)
-# Region: リージョン (ap-northeast-1)
-
-
-# 各スタックに必要なパラメータファイル群が自動生成されます
+# 各スタック用パラメータファイル群を自動生成
 ./infrastructure/create-parameters.sh
 
 # 2. JWT証明書を準備（Cosigner公開鍵は後で）
@@ -363,6 +363,38 @@ chmod +x run_install_from_files.sh install.sh
 
 ラッパーは `/opt/fireblocks` が既に存在する場合に `--force` を付けて再実行し、Nitro Enclaves allocator によりCPUが予約済みの場合は再実行前に解放を試みます。
 
+#### ファイル転送 + ラッパーでの callback-update
+
+Cosigner インストール済みの EC2 で Callback URL / callback public key だけ更新する場合は、`pushfiles/run_callback_update_from_files.sh` を使います。
+
+入力ファイル `callback-update.txt` の形式:
+
+1. Callback URL（`.../<env>/callback` まで）
+2. 認証方式（省略時 `1`）: `1`=PUBLIC KEY, `2`=certificate（`2` は未対応）
+
+```bash
+# ローカル端末から転送
+scp \
+  pushfiles/run_callback_update_from_files.sh \
+  pushfiles/callback-update.txt.example \
+  certs/callback_public.pem \
+  "$COSIGNER_HOST:/home/ec2-user/"
+
+# EC2 上
+cd /home/ec2-user
+cp callback-update.txt.example callback-update.txt
+vi callback-update.txt   # Callback URL を編集
+chmod +x run_callback_update_from_files.sh
+./run_callback_update_from_files.sh
+```
+
+デフォルトでは `./callback-update.txt` と `./callback_public.pem` を読み込みます。
+
+```bash
+./run_callback_update_from_files.sh <input_file> <callback_public_key_pem>
+```
+
+
 Fireblocks側はこのCallback URLをもとに、実際の署名要求では `/callback/v2/tx_sign_request` を呼び出します。API Gateway側は `/callback/{proxy+}` も受けられるため、この実リクエストもLambdaへ転送されます。
 
 #### 対話式でのインストール
@@ -473,6 +505,21 @@ sudo logrotate -d /etc/logrotate.conf
 ```
 
 これで、Cosigner ログのローテーション設定は `/etc/logrotate.d/customer_cosigner` を編集するだけで変更できます。
+
+#### Cosigner アプリログの CloudWatch 確認（SSH 不要）
+
+EC2 へログインせず、`/var/log/customer_cosigner.log` の一次ソースを CloudWatch Logs で確認できます。
+
+- **LogGroup**: `/fireblocks/{ProjectName}-customer_cosigner-{Environment}`
+- **Log stream**: EC2 インスタンス ID（`{instance_id}`）
+- **収集対象外**: `sudo cosigner logs` が生成する `*_cosigner.log`（スナップショット）
+
+```bash
+# 例: ProjectName=e2e-monitor-cbhv2, Environment=dev
+aws logs tail "/fireblocks/e2e-monitor-cbhv2-customer_cosigner-dev" --follow
+```
+
+ERROR 発生時は CloudWatch Alarm → SNS（メール）で通知されます。通知先メールは `cosigner.json` の `CosignerAlarmNotificationEmail` で設定し、デプロイ後に SNS 購読確認メールを承認してください。詳細は [STACK_DEPLOYMENT_GUIDE.md](./STACK_DEPLOYMENT_GUIDE.md) の「Cosigner アプリログの CloudWatch 連携」を参照してください。
 
 
 # その他実行オプション
