@@ -169,14 +169,10 @@ Resources:
             - !Sub "/fireblocks/${ProjectName}-customer_cosigner-${Environment}"
             - !Ref CosignerAppLogGroupName
       Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Stack
-          Value: cosigner
-        - Key: Project
-          Value: fireblocks-callback-handler
-        - Key: ManagedBy
-          Value: cloudformation
+        Environment: !Ref Environment
+        Stack: cosigner
+        Project: fireblocks-callback-handler
+        ManagedBy: cloudformation
 
   # Cosigner EC2 Instance
   CosignerInstance:

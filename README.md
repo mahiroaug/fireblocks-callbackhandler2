@@ -363,6 +363,38 @@ chmod +x run_install_from_files.sh install.sh
 
 ラッパーは `/opt/fireblocks` が既に存在する場合に `--force` を付けて再実行し、Nitro Enclaves allocator によりCPUが予約済みの場合は再実行前に解放を試みます。
 
+#### ファイル転送 + ラッパーでの callback-update
+
+Cosigner インストール済みの EC2 で Callback URL / callback public key だけ更新する場合は、`pushfiles/run_callback_update_from_files.sh` を使います。
+
+入力ファイル `callback-update.txt` の形式:
+
+1. Callback URL（`.../<env>/callback` まで）
+2. 認証方式（省略時 `1`）: `1`=PUBLIC KEY, `2`=certificate（`2` は未対応）
+
+```bash
+# ローカル端末から転送
+scp \
+  pushfiles/run_callback_update_from_files.sh \
+  pushfiles/callback-update.txt.example \
+  certs/callback_public.pem \
+  "$COSIGNER_HOST:/home/ec2-user/"
+
+# EC2 上
+cd /home/ec2-user
+cp callback-update.txt.example callback-update.txt
+vi callback-update.txt   # Callback URL を編集
+chmod +x run_callback_update_from_files.sh
+./run_callback_update_from_files.sh
+```
+
+デフォルトでは `./callback-update.txt` と `./callback_public.pem` を読み込みます。
+
+```bash
+./run_callback_update_from_files.sh <input_file> <callback_public_key_pem>
+```
+
+
 Fireblocks側はこのCallback URLをもとに、実際の署名要求では `/callback/v2/tx_sign_request` を呼び出します。API Gateway側は `/callback/{proxy+}` も受けられるため、この実リクエストもLambdaへ転送されます。
 
 #### 対話式でのインストール
